@@ -24,3 +24,4 @@ def custom_openapi(app):
     openapi_schema["security"] = [{"BearerAuth": []}]
     app.openapi_schema = openapi_schema
     return app.openapi_schema
+
