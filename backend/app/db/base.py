@@ -4,7 +4,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
 # Formato CORRECTO para la URL de PostgreSQL
-DATABASE_URL = "postgresql://postgres:JAroec16ec%40%2412@localhost:5432/Gestor"
+DATABASE_URL = "postgresql://postgres:Jaroec31317570.@localhost:5432/gestor"
 
 engine = create_engine(
     DATABASE_URL,
