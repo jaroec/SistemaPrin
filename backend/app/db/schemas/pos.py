@@ -120,3 +120,4 @@ class SaleFilter(BaseModel):
     payment_method: Optional[PaymentMethodEnum] = None
     min_amount: Optional[float] = None
     max_amount: Optional[float] = None
+    
