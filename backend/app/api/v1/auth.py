@@ -82,3 +82,4 @@ def read_users_me(current_user: models.user.User = Depends(get_current_user)):
     El token se valida automáticamente a través de la dependencia get_current_user.
     """
     return current_user
+    
