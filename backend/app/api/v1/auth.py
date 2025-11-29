@@ -44,6 +44,11 @@ def login_user(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
+    """
+    Endpoint de autenticación OAuth2.
+    - username: debe ser el email del usuario
+    - password: contraseña del usuario
+    """
     # Buscar usuario por email
     user = db.query(models.user.User).filter(models.user.User.email == form_data.username).first()
 
@@ -73,23 +78,21 @@ def login_user(
 
     # Registrar log de acceso
     print(f"🔐 Usuario '{user.email}' inició sesión con rol {user.role}")
+    print(f"🎫 Token generado (primeros 50 chars): {access_token[:50]}...")
 
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-# Perfil - CORREGIDO: Usa la dependencia directamente
-@router.get(
-    "/me", 
-    response_model=UserOut, 
-    dependencies=[Depends(get_current_user)],  # ← LÍNEA CLAVE
-    summary="Obtener perfil del usuario autenticado"
-)
+# ✅ ENDPOINT /me CORREGIDO - SIMPLICADO
+@router.get("/me", response_model=UserOut, summary="Obtener perfil del usuario autenticado")
 def read_users_me(current_user: models.user.User = Depends(get_current_user)):
     """
     Obtiene el perfil del usuario autenticado.
-    Requiere token JWT en el header Authorization.
+    Requiere token JWT en el header Authorization: Bearer <token>
     """
+    print(f"✅ Endpoint /me accedido por: {current_user.email}")
     return current_user
+
 
 @router.post("/verify-token")
 def verify_token(
@@ -119,4 +122,3 @@ def verify_token(
         
     except JWTError as e:
         return {"valid": False, "error": str(e)}
-
