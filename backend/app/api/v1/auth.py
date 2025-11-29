@@ -120,4 +120,3 @@ def verify_token(
     except JWTError as e:
         return {"valid": False, "error": str(e)}
 
-
