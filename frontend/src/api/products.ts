@@ -1,3 +1,4 @@
+// api/products.ts
 import api from './axios';
 import { Product, ProductCreate } from '@/types';
 
