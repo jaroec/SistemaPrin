@@ -26,11 +26,11 @@ app.add_middleware(
 
 # Rutas principales
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["🔐 Autenticación"])
+app.include_router(search.router, prefix="/api/v1", tags=["🔍 Búsqueda"])
 app.include_router(products.router, prefix="/api/v1/products", tags=["📦 Productos"])
 app.include_router(clients.router, prefix="/api/v1/clients", tags=["👥 Clientes"])
 app.include_router(pos.router, prefix="/api/v1/pos", tags=["🛒 Punto de Venta"])
 app.include_router(reports.router, prefix="/api/v1", tags=["📊 Reportes"])
-app.include_router(search.router, prefix="/api/v1", tags=["🔍 Búsqueda"])
 app.include_router(dashboard.router, prefix="/api/v1", tags=["📈 Dashboard"])
 
 # Seed del usuario admin
@@ -40,8 +40,7 @@ def startup_event():
     seed_admin()
 
 
-# Personalización del esquema OpenAPI
-# Personalización del esquema OpenAPI - VERSIÓN MEJORADA
+# ✅ CONFIGURACIÓN OPENAPI CORREGIDA
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
@@ -53,30 +52,37 @@ def custom_openapi():
         routes=app.routes,
     )
 
-    # Configuración de seguridad
+    # ✅ Configuración correcta de seguridad OAuth2
     openapi_schema["components"]["securitySchemes"] = {
-        "BearerAuth": {
-            "type": "http",
-            "scheme": "bearer",
-            "bearerFormat": "JWT"
+        "OAuth2PasswordBearer": {
+            "type": "oauth2",
+            "flows": {
+                "password": {
+                    "tokenUrl": "/api/v1/auth/token",
+                    "scopes": {}
+                }
+            }
         }
     }
 
-    # 🔧 APLICAR SEGURIDAD A RUTAS PROTEGIDAS
-    protected_paths = [
-        "/api/v1/auth/me",
-        "/api/v1/products/",
-        "/api/v1/clients/", 
-        "/api/v1/pos/",
-        # Agrega aquí otras rutas que requieran autenticación
+    # ✅ Aplicar seguridad globalmente (todos los endpoints protegidos por defecto)
+    openapi_schema["security"] = [{"OAuth2PasswordBearer": []}]
+
+    # ✅ Excepciones: endpoints públicos (no requieren auth)
+    public_paths = [
+        "/api/v1/auth/token",
+        "/api/v1/auth/register",
+        "/",
+        "/health",
+        "/docs",
+        "/openapi.json"
     ]
-    
+
     for path, methods in openapi_schema["paths"].items():
-        for method, details in methods.items():
-            # Si la ruta está en la lista de protegidas o contiene "auth/me"
-            if any(protected_path in path for protected_path in protected_paths):
-                if "security" not in details:
-                    details["security"] = [{"BearerAuth": []}]
+        if path in public_paths:
+            for method in methods.values():
+                if isinstance(method, dict):
+                    method["security"] = []  # Sin autenticación
 
     app.openapi_schema = openapi_schema
     return app.openapi_schema
@@ -98,4 +104,3 @@ def root():
 def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "service": "pos-backend"}
-
