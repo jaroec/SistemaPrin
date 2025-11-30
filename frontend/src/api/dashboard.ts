@@ -1,3 +1,4 @@
+// api/dashboard.ts
 import api from './axios';
 import { DashboardSummary, RecentSale } from '@/types';
 
