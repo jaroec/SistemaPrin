@@ -16,9 +16,9 @@ SECRET_KEY = os.getenv("SECRET_KEY", "superclaveultrasecreta123")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
 
-# Endpoint de login EXACTO
+# ✅ CORRECCIÓN: Ruta completa al endpoint de login
 oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl="token",
+    tokenUrl="/api/v1/auth/token",  # ← CAMBIO AQUÍ
     auto_error=True
 )
 
@@ -69,7 +69,7 @@ def get_current_user(
 ):
     """Decodifica JWT y busca al usuario en BD"""
     
-    print("🧩 TOKEN RECIBIDO:", token)
+    print("🔐 TOKEN RECIBIDO:", token[:50] + "..." if len(token) > 50 else token)
 
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -100,8 +100,16 @@ def get_current_user(
         print("❌ Usuario no encontrado en la base de datos:", email)
         raise credentials_exception
 
+    if not user.is_active:
+        print("❌ Usuario inactivo:", email)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Usuario desactivado"
+        )
+
     print(f"✅ Usuario autenticado: {user.email} | Rol: {user.role}")
     return user
+
 
 # ==============================
 # 🔒 DECORADOR PARA ROLES
@@ -112,8 +120,7 @@ def role_required(*roles):
         if current_user.role not in roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="No tienes permisos para realizar esta acción"
+                detail=f"No tienes permisos para realizar esta acción. Rol requerido: {', '.join(roles)}"
             )
         return current_user
     return dependency
-
