@@ -1,3 +1,4 @@
+// api/sales.ts
 import api from './axios';
 import { Sale, SaleCreate, Payment } from '@/types';
 
