@@ -27,4 +27,3 @@ export const Card = ({ children, className, padding = 'md' }: CardProps) => {
     </div>
   );
 };
-
