@@ -1,3 +1,4 @@
+// pages/Login.tsx
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
@@ -18,27 +19,56 @@ export const Login = () => {
     mutationFn: authApi.login,
     onSuccess: async (data) => {
       try {
+        // Obtener perfil del usuario
         const user = await authApi.getProfile();
+        
+        // Guardar en Zustand store
         setAuth(user, data.access_token);
+        
+        // Redirigir al dashboard
         navigate('/');
-      } catch (err) {
-        setError('Error al obtener perfil de usuario');
+      } catch (err: any) {
+        console.error('Error al obtener perfil:', err);
+        setError('Error al obtener datos del usuario');
       }
     },
     onError: (err: any) => {
-      setError(err.response?.data?.detail || 'Credenciales inválidas');
+      console.error('Error en login:', err);
+      
+      // Mensajes de error más específicos según el status code
+      const status = err.response?.status;
+      const detail = err.response?.data?.detail;
+      
+      if (status === 404) {
+        setError('Usuario no encontrado');
+      } else if (status === 401) {
+        setError('Contraseña incorrecta');
+      } else if (status === 403) {
+        setError('Cuenta desactivada. Contacte al administrador');
+      } else if (detail) {
+        setError(detail);
+      } else {
+        setError('Error al iniciar sesión. Intente nuevamente');
+      }
     },
   });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    
+
+    // Validaciones
     if (!email || !password) {
       setError('Por favor complete todos los campos');
       return;
     }
 
+    if (!email.includes('@')) {
+      setError('Por favor ingrese un email válido');
+      return;
+    }
+
+    // Ejecutar login
     loginMutation.mutate({ username: email, password });
   };
 
@@ -56,12 +86,14 @@ export const Login = () => {
 
         {/* Formulario */}
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Mensaje de error */}
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
               {error}
             </div>
           )}
 
+          {/* Campo de Email */}
           <Input
             label="Correo Electrónico"
             type="email"
@@ -69,8 +101,10 @@ export const Login = () => {
             onChange={(e) => setEmail(e.target.value)}
             placeholder="usuario@ejemplo.com"
             autoComplete="email"
+            disabled={loginMutation.isPending}
           />
 
+          {/* Campo de Contraseña */}
           <Input
             label="Contraseña"
             type="password"
@@ -78,8 +112,10 @@ export const Login = () => {
             onChange={(e) => setPassword(e.target.value)}
             placeholder="••••••••"
             autoComplete="current-password"
+            disabled={loginMutation.isPending}
           />
 
+          {/* Botón de Submit */}
           <Button
             type="submit"
             className="w-full"
@@ -98,10 +134,16 @@ export const Login = () => {
 
         {/* Credenciales de prueba */}
         <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-          <p className="text-sm text-gray-600 mb-2 font-medium">Credenciales de prueba:</p>
+          <p className="text-sm text-gray-600 mb-2 font-medium">
+            Credenciales de prueba:
+          </p>
           <div className="space-y-1 text-sm text-gray-700">
-            <p><strong>Admin:</strong> admin@pos.com / admin123</p>
-            <p><strong>Cajero:</strong> cajero@pos.com / cajero123</p>
+            <p>
+              <strong>Admin:</strong> admin@pos.com / admin123
+            </p>
+            <p>
+              <strong>Cajero:</strong> cajero@pos.com / cajero123
+            </p>
           </div>
         </div>
       </div>
