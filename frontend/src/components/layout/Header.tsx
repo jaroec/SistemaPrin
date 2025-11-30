@@ -1,3 +1,4 @@
+// components/layout/Header.tsx
 import { Bell, Search, Menu } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useState } from 'react';
