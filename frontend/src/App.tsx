@@ -1,3 +1,4 @@
+// App.tsx
 import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -9,6 +10,7 @@ import { POS } from '@/pages/POS';
 import { Products } from '@/pages/Products';
 import { Sales } from '@/pages/Sales';
 import { Clients } from '@/pages/Clients';
+import { Loader } from 'lucide-react';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -20,9 +22,38 @@ const queryClient = new QueryClient({
   },
 });
 
+// ✅ Componente de Loading
+function LoadingScreen() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="text-center">
+        <Loader className="w-12 h-12 animate-spin text-primary-600 mx-auto" />
+        <p className="mt-4 text-gray-600">Cargando...</p>
+      </div>
+    </div>
+  );
+}
+
+// ✅ Ruta protegida mejorada
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuthStore();
-  return isAuthenticated ? <>{children}</> : <Navigate to="/login" />;
+  const { isAuthenticated, isLoading } = useAuthStore();
+
+  if (isLoading) {
+    return <LoadingScreen />;
+  }
+
+  return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
+}
+
+// ✅ Ruta pública (redirige si ya está autenticado)
+function PublicRoute({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated, isLoading } = useAuthStore();
+
+  if (isLoading) {
+    return <LoadingScreen />;
+  }
+
+  return isAuthenticated ? <Navigate to="/" replace /> : <>{children}</>;
 }
 
 function App() {
@@ -36,8 +67,17 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
-          <Route path="/login" element={<Login />} />
-          
+          {/* Ruta de login */}
+          <Route
+            path="/login"
+            element={
+              <PublicRoute>
+                <Login />
+              </PublicRoute>
+            }
+          />
+
+          {/* Rutas protegidas */}
           <Route
             path="/"
             element={
@@ -48,7 +88,7 @@ function App() {
               </ProtectedRoute>
             }
           />
-          
+
           <Route
             path="/dashboard"
             element={
@@ -93,8 +133,8 @@ function App() {
             }
           />
 
-          {/* Redirect to POS by default */}
-          <Route path="*" element={<Navigate to="/" />} />
+          {/* Redirect a POS por defecto */}
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>
