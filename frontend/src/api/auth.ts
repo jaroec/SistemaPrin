@@ -1,18 +1,28 @@
+// api/auth.ts
 import api from './axios';
 import { LoginCredentials, AuthResponse, User } from '@/types';
 
 export const authApi = {
   /**
-   * Login - Autenticación con credenciales
+   * Login - Autenticación con credenciales OAuth2
    */
   login: async (credentials: LoginCredentials): Promise<AuthResponse> => {
-    const formData = new FormData();
-    formData.append('username', credentials.username);
-    formData.append('password', credentials.password);
+    // ✅ OAuth2 requiere application/x-www-form-urlencoded
+    const params = new URLSearchParams();
+    params.append('username', credentials.username);
+    params.append('password', credentials.password);
     
-    const response = await api.post<AuthResponse>('/api/v1/auth/token', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
+    const response = await api.post<AuthResponse>('/api/v1/auth/token', params, {
+      headers: { 
+        'Content-Type': 'application/x-www-form-urlencoded' 
+      },
     });
+    
+    // ✅ Guardar token automáticamente
+    if (response.data.access_token) {
+      localStorage.setItem('token', response.data.access_token);
+    }
+    
     return response.data;
   },
 
@@ -42,7 +52,8 @@ export const authApi = {
    */
   logout: () => {
     localStorage.removeItem('token');
-    localStorage.removeItem('user');
+    localStorage.removeItem('auth-storage'); // Limpiar Zustand persist
+    delete api.defaults.headers.common['Authorization'];
   },
 
   /**
@@ -50,10 +61,21 @@ export const authApi = {
    */
   verifyToken: async (): Promise<boolean> => {
     try {
+      const token = localStorage.getItem('token');
+      if (!token) return false;
+      
       await api.get('/api/v1/auth/me');
       return true;
     } catch {
+      authApi.logout();
       return false;
     }
+  },
+  
+  /**
+   * Obtener token del localStorage
+   */
+  getToken: (): string | null => {
+    return localStorage.getItem('token');
   },
 };
