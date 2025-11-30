@@ -7,3 +7,4 @@ from app.db.models.sale_detail import SaleDetail
 from app.db.models.payment import Payment
 
 __all__ = ["User", "Client", "Product", "Sale", "SaleDetail", "Payment"]
+
