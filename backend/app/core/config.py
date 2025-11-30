@@ -1,5 +1,5 @@
 # app/core/config.py
-from pydantic import BaseSettings, AnyUrl
+from pydantic_settings import BaseSettings
 from typing import Optional
 
 class Settings(BaseSettings):
