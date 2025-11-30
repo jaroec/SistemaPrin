@@ -283,3 +283,4 @@ export const Products = () => {
     </div>
   );
 };
+};
