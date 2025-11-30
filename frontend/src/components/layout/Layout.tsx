@@ -1,3 +1,4 @@
+// components/layout/Layout.tsx
 import { ReactNode, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { 
@@ -43,7 +44,7 @@ const Sidebar = () => {
             <ShoppingCart className="w-6 h-6 text-white" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-gray-900">Sistema POS</h1>
+            <h1 className="text-xl font-bold text-gray-900">FinkuPOS</h1>
             <p className="text-xs text-gray-500">v1.0</p>
           </div>
         </div>
