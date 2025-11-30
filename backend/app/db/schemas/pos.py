@@ -1,3 +1,4 @@
+# backend/app/db/schemas/pos.py
 from pydantic import BaseModel, Field, PositiveFloat, PositiveInt
 from datetime import datetime
 from typing import List, Optional
@@ -120,4 +121,3 @@ class SaleFilter(BaseModel):
     payment_method: Optional[PaymentMethodEnum] = None
     min_amount: Optional[float] = None
     max_amount: Optional[float] = None
-    
