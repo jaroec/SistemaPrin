@@ -1,3 +1,4 @@
+// components/pos/Cart.tsx
 import { Trash2, Plus, Minus, ShoppingCart as CartIcon } from 'lucide-react';
 import { useCartStore } from '@/store/cartStore';
 import { Button } from '@/components/ui/Button';
