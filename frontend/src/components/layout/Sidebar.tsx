@@ -30,14 +30,20 @@ const navigation: NavItem[] = [
 
 export const Sidebar = () => {
   const location = useLocation();
-  const { user, clearAuth } = useAuthStore();
 
-  const handleLogout = () => {
-    if (confirm('¿Estás seguro de cerrar sesión?')) {
-      clearAuth();
-      window.location.href = '/login';
-    }
+  // ⬅️ CORREGIDO: clearAuth eliminado, logout agregado
+  const logout = useAuthStore((state) => state.logout);
+  const user = useAuthStore((state) => state.user);
+
+  const handleLogout = async () => {
+    const confirmed = confirm("¿Estás seguro de cerrar sesión?");
+    if (!confirmed) return;
+
+    await logout();
+
+    window.location.href = "/login";
   };
+
 
   const filteredNavigation = navigation.filter((item) => {
     if (!item.roles) return true;
