@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Search, FileText, Eye, X as XIcon } from 'lucide-react';
 import { salesApi } from '@/api/sales';
 import { Button } from '@/components/ui/Button';
@@ -13,16 +13,33 @@ export const Sales = () => {
   const [statusFilter, setStatusFilter] = useState<SaleStatus | 'ALL'>('ALL');
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
 
+  const queryClient = useQueryClient();
+
   const { data: sales = [], isLoading } = useQuery({
     queryKey: ['sales'],
     queryFn: salesApi.getAll,
   });
 
+  const handleAnnul = async (id: number) => {
+    if (!confirm("¿Estás seguro de anular esta venta? Esta acción restaurará el stock y ajustará los montos.")) return;
+
+    try {
+      await salesApi.cancel(id); // o salesApi.annul si lo definiste así
+      queryClient.invalidateQueries(['sales']);
+      setSelectedSale(null);
+      alert("Venta anulada correctamente");
+    } catch (err: any) {
+      alert(err?.response?.data?.detail || err?.message || "Error al anular venta");
+    }
+  };
+
   const filteredSales = sales.filter((sale) => {
     const matchesSearch =
       sale.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
       sale.client_name?.toLowerCase().includes(searchTerm.toLowerCase());
+
     const matchesStatus = statusFilter === 'ALL' || sale.status === statusFilter;
+
     return matchesSearch && matchesStatus;
   });
 
@@ -35,6 +52,7 @@ export const Sales = () => {
 
   return (
     <div className="p-6 space-y-6">
+
       {/* Header */}
       <div>
         <h1 className="text-3xl font-bold text-gray-900">Ventas</h1>
@@ -79,6 +97,7 @@ export const Sales = () => {
               className="pl-10"
             />
           </div>
+
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as SaleStatus | 'ALL')}
@@ -90,10 +109,11 @@ export const Sales = () => {
             <option value="PENDIENTE">Pendiente</option>
             <option value="ANULADO">Anulado</option>
           </select>
+
         </div>
       </Card>
 
-      {/* Tabla de Ventas */}
+      {/* Tabla */}
       {isLoading ? (
         <Card>
           <div className="text-center py-12">
@@ -114,40 +134,24 @@ export const Sales = () => {
             <table className="w-full">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                    Código
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                    Cliente
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                    Fecha
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                    Total
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                    Pagado
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                    Pendiente
-                  </th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">
-                    Estado
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                    Acciones
-                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Código</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cliente</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Fecha</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Total</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Pagado</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Pendiente</th>
+                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase">Estado</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Acciones</th>
                 </tr>
               </thead>
+
               <tbody className="divide-y divide-gray-200">
                 {filteredSales.map((sale) => (
                   <tr key={sale.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <span className="text-sm font-mono font-semibold text-gray-900">
-                        {sale.code}
-                      </span>
+                      <span className="text-sm font-mono font-semibold text-gray-900">{sale.code}</span>
                     </td>
+
                     <td className="px-6 py-4">
                       <div>
                         <p className="text-sm font-medium text-gray-900">
@@ -158,26 +162,23 @@ export const Sales = () => {
                         )}
                       </div>
                     </td>
+
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <span className="text-sm text-gray-600">
-                        {formatDateTime(sale.created_at)}
-                      </span>
+                      <span className="text-sm text-gray-600">{formatDateTime(sale.created_at)}</span>
                     </td>
+
                     <td className="px-6 py-4 whitespace-nowrap text-right">
-                      <span className="text-sm font-semibold text-gray-900">
-                        {formatCurrency(sale.total_usd)}
-                      </span>
+                      <span className="text-sm font-semibold text-gray-900">{formatCurrency(sale.total_usd)}</span>
                     </td>
+
                     <td className="px-6 py-4 whitespace-nowrap text-right">
-                      <span className="text-sm text-green-600">
-                        {formatCurrency(sale.paid_usd)}
-                      </span>
+                      <span className="text-sm text-green-600">{formatCurrency(sale.paid_usd)}</span>
                     </td>
+
                     <td className="px-6 py-4 whitespace-nowrap text-right">
-                      <span className="text-sm text-orange-600">
-                        {formatCurrency(sale.balance_usd)}
-                      </span>
+                      <span className="text-sm text-orange-600">{formatCurrency(sale.balance_usd)}</span>
                     </td>
+
                     <td className="px-6 py-4 whitespace-nowrap text-center">
                       <span
                         className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
@@ -193,12 +194,9 @@ export const Sales = () => {
                         {sale.status}
                       </span>
                     </td>
+
                     <td className="px-6 py-4 whitespace-nowrap text-right">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setSelectedSale(sale)}
-                      >
+                      <Button size="sm" variant="ghost" onClick={() => setSelectedSale(sale)}>
                         <Eye className="w-4 h-4 mr-1" />
                         Ver
                       </Button>
@@ -206,35 +204,48 @@ export const Sales = () => {
                   </tr>
                 ))}
               </tbody>
+
             </table>
           </div>
         </Card>
       )}
 
-      {/* Modal de Detalle */}
+      {/* MODAL DE DETALLE */}
       {selectedSale && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            {/* Header */}
+
+            {/* HEADER */}
             <div className="p-6 border-b border-gray-200 flex items-center justify-between sticky top-0 bg-white">
               <div>
-                <h2 className="text-2xl font-bold text-gray-900">
-                  {selectedSale.code}
-                </h2>
-                <p className="text-sm text-gray-600 mt-1">
-                  {formatDateTime(selectedSale.created_at)}
-                </p>
+                <h2 className="text-2xl font-bold text-gray-900">{selectedSale.code}</h2>
+                <p className="text-sm text-gray-600 mt-1">{formatDateTime(selectedSale.created_at)}</p>
               </div>
-              <button
-                onClick={() => setSelectedSale(null)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-              >
-                <XIcon className="w-6 h-6" />
-              </button>
+
+              <div className="flex items-center gap-2">
+                {/* Botón ANULAR sólo si no está anulado */}
+                {selectedSale.status !== 'ANULADO' && (
+                  <Button
+                    variant="destructive"
+                    onClick={() => handleAnnul(selectedSale.id)}
+                    className="mr-2"
+                  >
+                    Anular Venta
+                  </Button>
+                )}
+
+                <button
+                  onClick={() => setSelectedSale(null)}
+                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  <XIcon className="w-6 h-6" />
+                </button>
+              </div>
             </div>
 
-            {/* Contenido */}
+            {/* CONTENIDO DEL MODAL */}
             <div className="p-6 space-y-6">
+
               {/* Cliente */}
               <div>
                 <h3 className="text-sm font-medium text-gray-500 mb-2">Cliente</h3>
@@ -251,10 +262,7 @@ export const Sales = () => {
                 <h3 className="text-sm font-medium text-gray-500 mb-3">Productos</h3>
                 <div className="space-y-2">
                   {selectedSale.details.map((detail) => (
-                    <div
-                      key={detail.id}
-                      className="flex justify-between items-center p-3 bg-gray-50 rounded-lg"
-                    >
+                    <div key={detail.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
                       <div>
                         <p className="font-medium text-gray-900">{detail.product_name}</p>
                         <p className="text-sm text-gray-600">
@@ -275,10 +283,7 @@ export const Sales = () => {
                   <h3 className="text-sm font-medium text-gray-500 mb-3">Pagos</h3>
                   <div className="space-y-2">
                     {selectedSale.payments.map((payment, index) => (
-                      <div
-                        key={index}
-                        className="flex justify-between items-center p-3 bg-gray-50 rounded-lg"
-                      >
+                      <div key={index} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
                         <div>
                           <p className="font-medium text-gray-900">{payment.method}</p>
                           {payment.reference && (
@@ -300,16 +305,17 @@ export const Sales = () => {
                   <span>Subtotal:</span>
                   <span>{formatCurrency(selectedSale.subtotal_usd)}</span>
                 </div>
+
                 <div className="flex justify-between text-xl font-bold text-gray-900">
                   <span>Total:</span>
                   <span>{formatCurrency(selectedSale.total_usd)}</span>
                 </div>
+
                 <div className="flex justify-between text-green-600">
                   <span>Pagado:</span>
-                  <span className="font-semibold">
-                    {formatCurrency(selectedSale.paid_usd)}
-                  </span>
+                  <span className="font-semibold">{formatCurrency(selectedSale.paid_usd)}</span>
                 </div>
+
                 {selectedSale.balance_usd > 0 && (
                   <div className="flex justify-between text-orange-600">
                     <span>Pendiente:</span>
@@ -319,10 +325,14 @@ export const Sales = () => {
                   </div>
                 )}
               </div>
+
             </div>
+
           </div>
         </div>
       )}
+
     </div>
   );
 };
+
