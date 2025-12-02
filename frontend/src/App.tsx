@@ -11,6 +11,7 @@ import { Products } from '@/pages/Products';
 import { Sales } from '@/pages/Sales';
 import { Clients } from '@/pages/Clients';
 import { Loader } from 'lucide-react';
+import { RegisterUser } from '@/pages/RegisterUser';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -121,6 +122,7 @@ function App() {
               </ProtectedRoute>
             }
           />
+          <Route path="/register-user" element={<RegisterUser />} />
 
           <Route
             path="/clients"
@@ -140,5 +142,7 @@ function App() {
     </QueryClientProvider>
   );
 }
+
+export default App;
 
 export default App;
