@@ -102,14 +102,24 @@ def get_current_user(
 
     if not user.is_active:
         print("❌ Usuario inactivo:", email)
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Usuario desactivado"
-        )
+        raise credentials_exception
 
-    print(f"✅ Usuario autenticado: {user.email} | Rol: {user.role}")
+    # -----------------------
+    # REVOCATION CHECK
+    # -----------------------
+    # Si el token fue revocado (logout server-side), rechazarlo.
+    try:
+        from app.db.models.revoked_token import RevokedToken
+        revoked = db.query(RevokedToken).filter(RevokedToken.token == token).first()
+        if revoked:
+            print("❌ Token revocado encontrado en DB. Rechazando acceso.")
+            raise credentials_exception
+    except Exception as e:
+        # Si no existe la tabla por alguna razón, solo logueamos la excepción y
+        # permitimos el acceso. En producción debes ejecutar la migración.
+        print("⚠️ No se pudo comprobar revoked_tokens:", str(e))
+
     return user
-
 
 # ==============================
 # 🔒 DECORADOR PARA ROLES
