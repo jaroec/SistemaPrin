@@ -11,21 +11,20 @@ import { Button } from '@/components/ui/Button';
 export const Login = () => {
   const navigate = useNavigate();
   const { setAuth } = useAuthStore();
+
+  const [isRegister, setIsRegister] = useState(false);
   const [email, setEmail] = useState('');
+  const [name, setName] = useState(''); // para el registro
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
+  // LOGIN MUTATION
   const loginMutation = useMutation({
     mutationFn: authApi.login,
     onSuccess: async (data) => {
       try {
-        // Obtener perfil del usuario
         const user = await authApi.getProfile();
-        
-        // Guardar en Zustand store
         setAuth(user, data.access_token);
-        
-        // Redirigir al dashboard
         navigate('/');
       } catch (err: any) {
         console.error('Error al obtener perfil:', err);
@@ -34,66 +33,95 @@ export const Login = () => {
     },
     onError: (err: any) => {
       console.error('Error en login:', err);
-      
-      // Mensajes de error más específicos según el status code
       const status = err.response?.status;
       const detail = err.response?.data?.detail;
-      
-      if (status === 404) {
-        setError('Usuario no encontrado');
-      } else if (status === 401) {
-        setError('Contraseña incorrecta');
-      } else if (status === 403) {
-        setError('Cuenta desactivada. Contacte al administrador');
-      } else if (detail) {
-        setError(detail);
-      } else {
-        setError('Error al iniciar sesión. Intente nuevamente');
-      }
+
+      if (status === 404) setError('Usuario no encontrado');
+      else if (status === 401) setError('Contraseña incorrecta');
+      else if (status === 403) setError('Cuenta desactivada');
+      else setError(detail || 'Error al iniciar sesión');
     },
+  });
+
+  // REGISTRO MUTATION
+  const registerMutation = useMutation({
+    mutationFn: authApi.register, // <-- asegúrate que exista
+    onSuccess: () => {
+      alert("Cuenta creada correctamente. Ya puedes iniciar sesión.");
+      setIsRegister(false);
+      setEmail('');
+      setPassword('');
+      setName('');
+    },
+    onError: (err: any) => {
+      console.error("Error en registro:", err);
+      setError(err.response?.data?.detail || "Error al registrar usuario");
+    }
   });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
-    // Validaciones
-    if (!email || !password) {
+    if (!email || !password || (isRegister && !name)) {
       setError('Por favor complete todos los campos');
       return;
     }
 
     if (!email.includes('@')) {
-      setError('Por favor ingrese un email válido');
+      setError('Ingrese un email válido');
       return;
     }
 
-    // Ejecutar login
-    loginMutation.mutate({ username: email, password });
+    if (isRegister) {
+      registerMutation.mutate({ name, email, password });
+    } else {
+      loginMutation.mutate({ username: email, password });
+    }
   };
+
+  const loading = loginMutation.isPending || registerMutation.isPending;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary-50 to-primary-100 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-8">
-        {/* Logo y Título */}
+        
+        {/* Logo */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 bg-primary-600 rounded-2xl mb-4">
             <ShoppingCart className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-3xl font-bold text-gray-900">Sistema POS</h1>
-          <p className="text-gray-600 mt-2">Inicia sesión para continuar</p>
+
+          <h1 className="text-3xl font-bold text-gray-900">
+            Sistema POS
+          </h1>
+          <p className="text-gray-600 mt-1">
+            {isRegister ? "Crea una nueva cuenta" : "Inicia sesión para continuar"}
+          </p>
         </div>
 
-        {/* Formulario */}
+        {/* FORM */}
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Mensaje de error */}
+          
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
               {error}
             </div>
           )}
 
-          {/* Campo de Email */}
+          {/* Nombre (solo en registro) */}
+          {isRegister && (
+            <Input
+              label="Nombre Completo"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Juan Pérez"
+              disabled={loading}
+            />
+          )}
+
+          {/* Email */}
           <Input
             label="Correo Electrónico"
             type="email"
@@ -101,10 +129,10 @@ export const Login = () => {
             onChange={(e) => setEmail(e.target.value)}
             placeholder="usuario@ejemplo.com"
             autoComplete="email"
-            disabled={loginMutation.isPending}
+            disabled={loading}
           />
 
-          {/* Campo de Contraseña */}
+          {/* Password */}
           <Input
             label="Contraseña"
             type="password"
@@ -112,40 +140,48 @@ export const Login = () => {
             onChange={(e) => setPassword(e.target.value)}
             placeholder="••••••••"
             autoComplete="current-password"
-            disabled={loginMutation.isPending}
+            disabled={loading}
           />
 
-          {/* Botón de Submit */}
-          <Button
-            type="submit"
-            className="w-full"
-            disabled={loginMutation.isPending}
-          >
-            {loginMutation.isPending ? (
+          {/* Botón */}
+          <Button type="submit" className="w-full" disabled={loading}>
+            {loading ? (
               <>
                 <Loader className="w-5 h-5 mr-2 animate-spin" />
-                Iniciando sesión...
+                {isRegister ? "Registrando..." : "Iniciando sesión..."}
               </>
             ) : (
-              'Iniciar Sesión'
+              isRegister ? "Crear Cuenta" : "Iniciar Sesión"
             )}
           </Button>
         </form>
 
-        {/* Credenciales de prueba */}
-        <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-          <p className="text-sm text-gray-600 mb-2 font-medium">
-            Credenciales de prueba:
+        {/* Enlace para ir al Registro */}
+        <div className="mt-6 text-center">
+          <p className="text-gray-600 text-sm">
+            ¿No tienes una cuenta?
           </p>
-          <div className="space-y-1 text-sm text-gray-700">
-            <p>
-              <strong>Admin:</strong> admin@pos.com / admin123
-            </p>
-            <p>
-              <strong>Cajero:</strong> cajero@pos.com / cajero123
-            </p>
-          </div>
+          <button
+          onClick={() => navigate('/register-user')}
+          className="text-primary-600 font-semibold hover:underline text-sm mt-1"
+          >
+            Crear cuenta nueva
+          </button>
         </div>
+
+
+        {/* Credenciales demo (solo en login) */}
+        {!isRegister && (
+          <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+            <p className="text-sm text-gray-600 mb-2 font-medium">
+              Credenciales de prueba:
+            </p>
+            <div className="space-y-1 text-sm text-gray-700">
+              <p><strong>Admin:</strong> admin@pos.com / admin123</p>
+              <p><strong>Cajero:</strong> cajero@pos.com / cajero123</p>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
