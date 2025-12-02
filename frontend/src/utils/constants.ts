@@ -39,3 +39,4 @@ export const PRODUCT_CATEGORIES = [
   'Automotriz',
   'Otros',
 ];
+
