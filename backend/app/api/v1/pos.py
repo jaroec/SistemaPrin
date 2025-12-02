@@ -10,7 +10,8 @@ from app.db.schemas.pos import (
     SaleOut,
     SaleDetailOut,
     PaymentCreate,
-    PaymentOut
+    PaymentOut,
+    PaymentMethodEnum,
 )
 from sqlalchemy import func
 
@@ -32,7 +33,8 @@ def create_sale(
     current_user=Depends(role_required("CAJERO", "ADMIN"))
 ):
     """
-    Crear venta con validación de stock, pagos y actualización automática
+    Crear venta con validación de stock, pagos y actualización automática.
+    Si el método de pago es CREDITO, client_id es requerido.
     """
     try:
         # 1️⃣ Gestionar cliente
@@ -41,41 +43,32 @@ def create_sale(
             client = db.query(models.client.Client).filter(
                 models.client.Client.id == payload.client_id
             ).first()
-        
-        if not client and (payload.client_name or payload.client_phone):
-            client = models.client.Client(
-                name=payload.client_name or "Cliente General",
-                phone=payload.client_phone
-            )
-            db.add(client)
-            db.flush()  # ✅ Para obtener client.id sin commit
+            if not client:
+                raise HTTPException(status_code=404, detail="Cliente no encontrado")
 
         # 2️⃣ Validar productos y calcular totales
         subtotal = 0.0
         details_data = []
-        
+
         for item in payload.items:
             product = db.query(models.product.Product).filter(
                 models.product.Product.id == item.product_id,
                 models.product.Product.is_active == True
             ).first()
-            
+
             if not product:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Producto {item.product_id} no encontrado"
-                )
-            
+                raise HTTPException(status_code=404, detail=f"Producto {item.product_id} no encontrado")
+
             if product.stock < item.quantity:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Stock insuficiente para {product.name} (disponible: {product.stock})"
                 )
-            
+
             price_usd = product.sale_price
             item_subtotal = round(price_usd * item.quantity, 2)
             subtotal += item_subtotal
-            
+
             details_data.append({
                 'product': product,
                 'quantity': item.quantity,
@@ -83,15 +76,21 @@ def create_sale(
                 'subtotal_usd': item_subtotal
             })
 
-        subtotal = round(subtotal, 2)
-        total = subtotal  # Aquí podrías agregar descuentos/impuestos
+        # 3️⃣ Calcular totales
+        discount = getattr(payload, "discount_usd", 0.0) or 0.0
+        total = round(subtotal - discount, 2)
 
-        # 3️⃣ Crear venta
+        # Si el método de pago es CREDITO => client_id es obligatorio
+        if payload.payment_method == PaymentMethodEnum.CREDITO and not payload.client_id:
+            raise HTTPException(status_code=400, detail="client_id es requerido para ventas a CREDITO")
+
+        # 4️⃣ Crear venta (pendiente inicialmente)
         sale = models.sale.Sale(
-            code=generate_sale_code(db),
+            code=f"V-{func.random()}",  # o tu lógica para generar códigos
             client_id=client.id if client else None,
             seller_id=payload.seller_id,
             subtotal_usd=subtotal,
+            discount_usd=discount,
             total_usd=total,
             paid_usd=0.0,
             balance_usd=total,
@@ -101,7 +100,7 @@ def create_sale(
         db.add(sale)
         db.flush()
 
-        # 4️⃣ Crear detalles y actualizar stock
+        # 5️⃣ Crear detalles y actualizar stock
         for detail_data in details_data:
             detail = models.sale_detail.SaleDetail(
                 sale_id=sale.id,
@@ -111,15 +110,18 @@ def create_sale(
                 subtotal_usd=detail_data['subtotal_usd']
             )
             db.add(detail)
-            
+
             # ✅ Descontar stock
             detail_data['product'].stock -= detail_data['quantity']
 
-        # 5️⃣ Registrar pagos
+        # 6️⃣ Registrar pagos enviados en la creación
         total_paid = 0.0
         if payload.payments:
             for payment_data in payload.payments:
                 amount = round(payment_data.amount_usd, 2)
+                # Prevención: no permitir que el pago inicial exceda el total
+                if total_paid + amount > total:
+                    raise HTTPException(status_code=400, detail="El monto de pago inicial excede el total de la venta")
                 payment = models.payment.Payment(
                     sale_id=sale.id,
                     method=payment_data.method.value,
@@ -129,7 +131,7 @@ def create_sale(
                 db.add(payment)
                 total_paid += amount
 
-        # 6️⃣ Actualizar estado de la venta
+        # 7️⃣ Actualizar estado de la venta
         sale.paid_usd = round(total_paid, 2)
         sale.balance_usd = round(max(total - sale.paid_usd, 0.0), 2)
 
@@ -143,43 +145,46 @@ def create_sale(
         db.commit()
         db.refresh(sale)
 
-        # 7️⃣ Construir respuesta
-        details_out = [
-            SaleDetailOut(
+        # Construir salida
+        details_out = []
+        for d in sale.details:
+            details_out.append(SaleDetailOut(
                 id=d.id,
                 product_id=d.product_id,
-                product_name=d.product.name,
+                product_name=getattr(d.product, "name", ""),
                 quantity=d.quantity,
                 price_usd=d.price_usd,
                 subtotal_usd=d.subtotal_usd
-            )
-            for d in sale.details
+            ))
+
+        payments_out = [
+            PaymentOut(id=p.id, method=p.method, amount_usd=p.amount_usd, reference=p.reference, created_at=p.created_at)
+            for p in sale.payments
         ]
 
         return SaleOut(
             id=sale.id,
             code=sale.code,
             client_id=sale.client_id,
-            client_name=client.name if client else None,
-            client_phone=client.phone if client else None,
+            client_name= getattr(sale.client, "name", None),
             seller_id=sale.seller_id,
             subtotal_usd=sale.subtotal_usd,
+            discount_usd=sale.discount_usd,
             total_usd=sale.total_usd,
             paid_usd=sale.paid_usd,
             balance_usd=sale.balance_usd,
             payment_method=sale.payment_method,
             status=sale.status,
             details=details_out,
-            payments=sale.payments,
+            payments=payments_out,
             created_at=sale.created_at
         )
 
     except HTTPException:
-        db.rollback()
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Error al crear venta: {str(e)}")
 
 
 @router.get("/sales/{sale_id}", response_model=SaleOut)
@@ -405,3 +410,45 @@ def pay_sale(
         "balance_usd": sale.balance_usd,
         "status": sale.status
     }
+
+@router.put("/sales/{sale_id}/annul", status_code=status.HTTP_200_OK)
+def annul_sale(
+    sale_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(role_required("ADMIN"))
+):
+    """
+    ANULAR una venta: Restaurar stock, marcar venta ANULADO, ajustar pagos.
+    Si existió un pago y existe client_id, se registra como saldo a favor en client.balance.
+    """
+    sale = db.query(models.sale.Sale).filter(models.sale.Sale.id == sale_id).first()
+    if not sale:
+        raise HTTPException(status_code=404, detail="Venta no encontrada")
+
+    if sale.status == "ANULADO":
+        raise HTTPException(status_code=400, detail="Venta ya anulada")
+
+    # Restaurar stock
+    for detail in sale.details:
+        product = db.query(models.product.Product).filter(
+            models.product.Product.id == detail.product_id
+        ).first()
+        if product:
+            product.stock += detail.quantity
+
+    # Ajuste financiero:
+    #  - Si hubo pagos y existe cliente -> registrar saldo a favor en client.balance
+    #  - Poner paid_usd y balance_usd a 0 en la venta
+    if sale.paid_usd and sale.paid_usd > 0:
+        if sale.client_id:
+            client = db.query(models.client.Client).filter(models.client.Client.id == sale.client_id).first()
+            if client:
+                client.balance = round((client.balance or 0.0) + sale.paid_usd, 2)
+        # Si no hay cliente, podrías generar una nota de crédito aquí (pendiente de implementación)
+    sale.paid_usd = 0.0
+    sale.balance_usd = 0.0
+    sale.status = "ANULADO"
+
+    db.commit()
+
+    return {"detail": "Venta anulada correctamente"}
