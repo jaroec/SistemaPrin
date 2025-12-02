@@ -1,18 +1,18 @@
 // store/authStore.ts
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import { User } from '@/types';
-import { authApi } from '@/api/auth';
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+import { authApi } from "@/api/auth";
+import api from "@/api/axios";
+import { User } from "@/types";
 
 interface AuthState {
   user: User | null;
   token: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-  
-  // Actions
+
   setAuth: (user: User, token: string) => void;
-  logout: () => void;
+  logout: () => Promise<void>;
   initAuth: () => Promise<void>;
 }
 
@@ -24,11 +24,10 @@ export const useAuthStore = create<AuthState>()(
       isAuthenticated: false,
       isLoading: true,
 
-      /**
-       * Establecer autenticación después del login
-       */
       setAuth: (user: User, token: string) => {
-        localStorage.setItem('token', token);
+        localStorage.setItem("token", token);
+        api.defaults.headers.common["Authorization"] = `Bearer ${token}`;
+
         set({
           user,
           token,
@@ -37,77 +36,67 @@ export const useAuthStore = create<AuthState>()(
         });
       },
 
-      /**
-       * Cerrar sesión
-       */
-      logout: () => {
-        authApi.logout();
+      logout: async () => {
+        try {
+          await authApi.logout();
+        } catch (error) {
+          console.error("Error backend logout:", error);
+        }
+
         set({
           user: null,
           token: null,
           isAuthenticated: false,
-          isLoading: false,
         });
+
+        localStorage.removeItem("token");
+        localStorage.removeItem("auth-storage");
+
+        delete api.defaults.headers.common["Authorization"];
       },
 
-      /**
-       * Inicializar autenticación al cargar la app
-       * Verifica si hay un token válido en localStorage
-       */
       initAuth: async () => {
-        try {
-          set({ isLoading: true });
+        set({ isLoading: true });
 
-          const token = localStorage.getItem('token');
-          
-          if (!token) {
-            set({
-              user: null,
-              token: null,
-              isAuthenticated: false,
-              isLoading: false,
-            });
-            return;
-          }
+        const token = localStorage.getItem("token");
 
-          // Verificar si el token es válido
-          const isValid = await authApi.verifyToken();
-
-          if (isValid) {
-            // Obtener datos actualizados del usuario
-            const user = await authApi.getProfile();
-            set({
-              user,
-              token,
-              isAuthenticated: true,
-              isLoading: false,
-            });
-          } else {
-            // Token inválido o expirado
-            authApi.logout();
-            set({
-              user: null,
-              token: null,
-              isAuthenticated: false,
-              isLoading: false,
-            });
-          }
-        } catch (error) {
-          console.error('Error al inicializar autenticación:', error);
-          authApi.logout();
+        if (!token) {
           set({
             user: null,
             token: null,
             isAuthenticated: false,
             isLoading: false,
           });
+          return;
+        }
+
+        api.defaults.headers.common["Authorization"] = `Bearer ${token}`;
+
+        try {
+          const isValid = await authApi.verifyToken();
+
+          if (!isValid) {
+            await get().logout();
+            return;
+          }
+
+          const user = await authApi.getProfile();
+
+          set({
+            user,
+            token,
+            isAuthenticated: true,
+            isLoading: false,
+          });
+        } catch {
+          await get().logout();
         }
       },
     }),
+
     {
-      name: 'auth-storage', // nombre del item en localStorage
+      name: "auth-storage",
       partialize: (state) => ({
-        // Solo persistir estos campos
         user: state.user,
         token: state.token,
       }),
