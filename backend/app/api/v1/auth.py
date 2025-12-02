@@ -1,10 +1,10 @@
 # backend/app/api/v1/auth.py
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from datetime import timedelta
+from datetime import timedelta, datetime
 from jose import jwt, JWTError
-
+from jose import jwt as jose_jwt
 from app.db import models
 from app.db.schemas.user import UserCreate, UserOut, Token
 from app.core.security import (
@@ -92,6 +92,41 @@ def read_users_me(current_user: models.user.User = Depends(get_current_user)):
     """
     print(f"✅ Endpoint /me accedido por: {current_user.email}")
     return current_user
+
+@router.post("/logout", status_code=status.HTTP_200_OK, summary="Cerrar sesión (revocar token)")
+def logout(
+    authorization: str = Header(None),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user),  # obliga que el token sea válido para revocar
+):
+    """
+    Revoca el token JWT actual (se debe enviar Authorization: Bearer <token>).
+    Guarda el token en la tabla revoked_tokens con la fecha de expiración.
+    """
+    if not authorization:
+        raise HTTPException(status_code=400, detail="Se requiere cabecera Authorization")
+
+    token = authorization.split(" ")[1] if " " in authorization else authorization
+
+    # Intentar decodificar para obtener exp
+    try:
+        payload = jose_jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        exp_ts = payload.get("exp")
+        expires_at = datetime.utcfromtimestamp(exp_ts) if exp_ts else None
+    except Exception:
+        expires_at = None
+
+    # Guardar en tabla revoked_tokens
+    try:
+        from app.db.models.revoked_token import RevokedToken
+        revoked = RevokedToken(token=token, expires_at=expires_at)
+        db.add(revoked)
+        db.commit()
+    except Exception as e:
+        # Si la tabla no existe, fallamos con un mensaje claro
+        raise HTTPException(status_code=500, detail=f"Error al revocar token: {str(e)}")
+
+    return {"detail": "Logout exitoso - token revocado"}
 
 
 @router.post("/verify-token")
