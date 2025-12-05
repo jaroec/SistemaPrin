@@ -1,5 +1,4 @@
-// components/layout/Sidebar.tsx
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -7,7 +6,6 @@ import {
   Users,
   FileText,
   LogOut,
-  BarChart3,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import clsx from 'clsx';
@@ -25,25 +23,28 @@ const navigation: NavItem[] = [
   { name: 'Productos', href: '/products', icon: Package },
   { name: 'Ventas', href: '/sales', icon: FileText },
   { name: 'Clientes', href: '/clients', icon: Users },
-  { name: 'Reportes', href: '/reports', icon: BarChart3, roles: ['ADMIN'] },
 ];
 
 export const Sidebar = () => {
   const location = useLocation();
-
-  // ⬅️ CORREGIDO: clearAuth eliminado, logout agregado
+  const navigate = useNavigate();
   const logout = useAuthStore((state) => state.logout);
   const user = useAuthStore((state) => state.user);
 
+  // ✅ LOGOUT MEJORADO
   const handleLogout = async () => {
-    const confirmed = confirm("¿Estás seguro de cerrar sesión?");
-    if (!confirmed) return;
+    try {
+      const confirmed = window.confirm("¿Estás seguro de cerrar sesión?");
+      if (!confirmed) return;
 
-    await logout();
-
-    window.location.href = "/login";
+      await logout();  // ✅ Llamar a logout
+      localStorage.clear();
+      navigate('/login', { replace: true });
+    } catch (error) {
+      console.error('Error:', error);
+      navigate('/login', { replace: true });
+    }
   };
-
 
   const filteredNavigation = navigation.filter((item) => {
     if (!item.roles) return true;
@@ -59,8 +60,8 @@ export const Sidebar = () => {
             <ShoppingCart className="w-6 h-6 text-white" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-gray-900">Sistema POS</h1>
-            <p className="text-xs text-gray-500">v2.0</p>
+            <h1 className="text-xl font-bold text-gray-900">FinkuPOS</h1>
+            <p className="text-xs text-gray-500">v1.0</p>
           </div>
         </Link>
       </div>
@@ -100,13 +101,13 @@ export const Sidebar = () => {
               {user?.name}
             </p>
             <p className="text-xs text-gray-500 truncate">{user?.email}</p>
-            <span className="inline-block mt-1 px-2 py-0.5 text-xs font-medium bg-primary-100 text-primary-700 rounded">
-              {user?.role}
-            </span>
           </div>
         </div>
+
+        {/* ✅ BOTÓN LOGOUT MEJORADO */}
         <button
           onClick={handleLogout}
+          type="button"
           className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors"
         >
           <LogOut className="w-4 h-4" />
