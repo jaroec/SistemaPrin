@@ -1,4 +1,7 @@
-// store/authStore.ts
+// ============================================================================
+//  store/authStore.ts
+// ============================================================================
+
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { authApi } from "@/api/auth";
@@ -36,23 +39,32 @@ export const useAuthStore = create<AuthState>()(
         });
       },
 
+      // ✅ LOGOUT CORREGIDO
       logout: async () => {
         try {
+          // 1️⃣ Llamar al backend para revocar el token
           await authApi.logout();
         } catch (error) {
-          console.error("Error backend logout:", error);
+          console.warn("⚠️ Error al revocar token en backend:", error);
+          // No throw - continuamos limpiando el frontend aunque falle el backend
         }
 
+        // 2️⃣ Limpiar estado local
         set({
           user: null,
           token: null,
-          isAuthenticated: false,
+          isAuthenticated: false, 
         });
 
+        // 3️⃣ Limpiar localStorage
         localStorage.removeItem("token");
         localStorage.removeItem("auth-storage");
 
+        // 4️⃣ Limpiar headers de axios
         delete api.defaults.headers.common["Authorization"];
+
+        // 5️⃣ Redirigir a login (no es responsabilidad de store, pero documentado)
+        // El componente que llama logout debe hacer: navigate('/login')
       },
 
       initAuth: async () => {
