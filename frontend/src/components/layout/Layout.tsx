@@ -28,10 +28,10 @@ const navigation = [
 const Sidebar = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, clearAuth } = useAuthStore();
+  const { user, logout } = useAuthStore();
 
-  const handleLogout = () => {
-    clearAuth();
+  const handleLogout = async () => {
+    await logout();
     navigate('/login');
   };
 
