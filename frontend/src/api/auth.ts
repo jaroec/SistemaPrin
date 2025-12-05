@@ -40,27 +40,30 @@ export const authApi = {
     return res.data;
   },
 
+  // ✅ LOGOUT CORREGIDO
   logout: async () => {
     try {
       const token = localStorage.getItem("token");
-      await api.post(
-        "/api/v1/auth/logout",
-        {},
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      );
+      if (token) {
+        await api.post(
+          "/api/v1/auth/logout",
+          {},
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+      }
     } catch (e) {
-      console.warn("Logout backend falló:", e);
-    } 
+      console.warn("⚠️ Logout backend falló (continuando):", e);
+    }
 
+    // Limpiar frontend sin importar si falló el backend
     localStorage.removeItem("token");
     localStorage.removeItem("auth-storage");
     delete api.defaults.headers.common["Authorization"];
   },
-
 
   verifyToken: async (): Promise<boolean> => {
     try {
@@ -70,10 +73,7 @@ export const authApi = {
       return false;
     }
   },
-  
-  /**
-   * Obtener token del localStorage
-   */
+
   getToken: (): string | null => {
     return localStorage.getItem('token');
   },
