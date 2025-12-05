@@ -122,7 +122,11 @@ function App() {
               </ProtectedRoute>
             }
           />
-          <Route path="/register-user" element={<RegisterUser />} />
+          <Route path="/register-user" element={
+            <ProtectedRoute>
+              <RegisterUser />
+            </ProtectedRoute>
+          } />
 
           <Route
             path="/clients"
@@ -142,7 +146,5 @@ function App() {
     </QueryClientProvider>
   );
 }
-
-export default App;
 
 export default App;
