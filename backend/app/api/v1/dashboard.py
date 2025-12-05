@@ -1,4 +1,4 @@
-# backend/app/api/v1/dashboard.py
+# backend/app/api/v1/dashboard.py - VERSIÓN CORREGIDA
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -15,14 +15,15 @@ def get_dashboard_summary(
     current_user=Depends(role_required("CAJERO", "ADMIN"))
 ):
     """
-    Resumen ejecutivo del dashboard.
-    Incluye ventas del día, productos con bajo stock, clientes con deuda, etc.
+    ✅ CORREGIDO: Resumen ejecutivo del dashboard.
+    Excluye correctamente ventas anuladas (ANULADO).
+    No registra montos de ventas anuladas en los totales.
     """
     today = date.today()
     yesterday = today - timedelta(days=1)
     this_month_start = date(today.year, today.month, 1)
     
-    # Ventas del día
+    # Ventas del día (EXCLUIR ANULADAS)
     today_sales = db.query(
         func.count(models.sale.Sale.id).label('count'),
         func.sum(models.sale.Sale.total_usd).label('total'),
@@ -30,41 +31,42 @@ def get_dashboard_summary(
         func.sum(models.sale.Sale.balance_usd).label('pending')
     ).filter(
         func.date(models.sale.Sale.created_at) == today,
-        models.sale.Sale.status != "ANULADO"
+        models.sale.Sale.status != "ANULADO"  # ✅ Excluir anuladas
     ).first()
     
-    # Ventas de ayer
+    # Ventas de ayer (EXCLUIR ANULADAS)
     yesterday_sales = db.query(
         func.sum(models.sale.Sale.total_usd).label('total')
     ).filter(
         func.date(models.sale.Sale.created_at) == yesterday,
-        models.sale.Sale.status != "ANULADO"
+        models.sale.Sale.status != "ANULADO"  # ✅ Excluir anuladas
     ).first()
     
-    # Ventas del mes
+    # Ventas del mes (EXCLUIR ANULADAS)
     month_sales = db.query(
         func.count(models.sale.Sale.id).label('count'),
         func.sum(models.sale.Sale.total_usd).label('total')
     ).filter(
         func.date(models.sale.Sale.created_at) >= this_month_start,
-        models.sale.Sale.status != "ANULADO"
+        models.sale.Sale.status != "ANULADO"  # ✅ Excluir anuladas
     ).first()
     
-    # Productos con bajo stock
+    # Productos con bajo stock (activos)
     low_stock_count = db.query(func.count(models.product.Product.id)).filter(
         models.product.Product.stock <= models.product.Product.min_stock,
         models.product.Product.is_active == True
     ).scalar()
     
-    # Clientes con deuda
+    # Clientes con deuda (balance > 0)
     clients_with_debt = db.query(func.count(models.client.Client.id)).filter(
         models.client.Client.balance > 0,
         models.client.Client.is_active == True
     ).scalar()
     
-    # Ventas pendientes de pago
+    # Ventas pendientes de pago (EXCLUIR ANULADAS)
     pending_sales = db.query(func.count(models.sale.Sale.id)).filter(
-        models.sale.Sale.status.in_(["PENDIENTE", "CREDITO"])
+        models.sale.Sale.status.in_(["PENDIENTE", "CREDITO"]),
+        models.sale.Sale.status != "ANULADO"  # ✅ Extra validación
     ).scalar()
     
     # Calcular variación diaria
@@ -101,10 +103,11 @@ def get_recent_sales(
     current_user=Depends(role_required("CAJERO", "ADMIN"))
 ):
     """
-    Últimas ventas realizadas.
+    ✅ CORREGIDO: Últimas ventas realizadas.
+    Excluye ventas anuladas (ANULADO) del listado.
     """
     sales = db.query(models.sale.Sale).filter(
-        models.sale.Sale.status != "ANULADO"
+        models.sale.Sale.status != "ANULADO"  # ✅ Excluir anuladas
     ).order_by(
         models.sale.Sale.created_at.desc()
     ).limit(limit).all()
@@ -121,3 +124,49 @@ def get_recent_sales(
         })
     
     return result
+
+
+@router.get("/dashboard/clients-with-debt")
+def get_clients_with_debt(
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    current_user=Depends(role_required("CAJERO", "ADMIN"))
+):
+    """
+    ✅ NUEVO: Obtener clientes con deuda pendiente
+    Útil para ver quiénes deben dinero.
+    """
+    clients = db.query(
+        models.client.Client.id,
+        models.client.Client.name,
+        models.client.Client.phone,
+        models.client.Client.balance,
+        func.count(models.sale.Sale.id).label('sales_count'),
+        func.sum(models.sale.Sale.total_usd).label('total_spent')
+    ).join(
+        models.sale.Sale,
+        models.client.Client.id == models.sale.Sale.client_id,
+        isouter=True
+    ).filter(
+        models.client.Client.balance > 0,
+        models.client.Client.is_active == True
+    ).group_by(
+        models.client.Client.id,
+        models.client.Client.name,
+        models.client.Client.phone,
+        models.client.Client.balance
+    ).order_by(
+        models.client.Client.balance.desc()
+    ).limit(limit).all()
+    
+    return [
+        {
+            "client_id": c.id,
+            "client_name": c.name,
+            "phone": c.phone,
+            "balance_owed": round(c.balance, 2),
+            "sales_count": c.sales_count or 0,
+            "total_spent_usd": round(c.total_spent or 0.0, 2)
+        }
+        for c in clients
+    ]
