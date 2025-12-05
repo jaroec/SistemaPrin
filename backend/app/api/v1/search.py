@@ -12,7 +12,6 @@ import logging
 router = APIRouter()
 logger = logging.getLogger("app.search")
 
-
 def orm_to_dict(obj: Any) -> Dict[str, Any]:
     """
     Convierte un objeto ORM a dict usando las columnas de la tabla.
@@ -171,4 +170,3 @@ def get_products_by_category(
         results.append(row)
 
     return results
-
