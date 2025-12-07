@@ -82,7 +82,7 @@ export interface SaleItem {
 }
 
 export interface SaleCreate {
-  client_id?: number;
+  client_id?: number;  
   client_name?: string;
   client_phone?: string;
   seller_id: number;
