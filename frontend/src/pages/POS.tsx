@@ -3,7 +3,6 @@ import { useCartStore } from '@/store/cartStore';
 import { Product } from '@/types';
 import { ProductSearch } from '@/components/pos/ProductSearch';
 import { Cart } from '@/components/pos/Cart';
-import { ClientSelector } from '@/components/pos/ClientSelector';
 import { PaymentModal } from '@/components/pos/PaymentModal';
 
 export const POS = () => {
@@ -33,11 +32,6 @@ export const POS = () => {
           <p className="text-gray-600">Busca y agrega productos al carrito</p>
         </div>
 
-        {/* Cliente Selector */}
-        <div className="mb-6">
-          <ClientSelector />
-        </div>
-
         {/* Búsqueda de Productos */}
         <div className="mb-6">
           <ProductSearch onProductSelect={handleProductSelect} />
@@ -62,3 +56,4 @@ export const POS = () => {
     </div>
   );
 };
+
