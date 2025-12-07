@@ -91,7 +91,7 @@ class SaleOut(BaseModel):
     code: str
     client_id: Optional[int]
     client_name: Optional[str]
-    client_phone: Optional[str]
+    client_phone: Optional[str] = None  # ✅ AHORA ES OPCIONAL
     seller_id: int
     subtotal_usd: float
     total_usd: float
