@@ -10,15 +10,15 @@ import { POS } from '@/pages/POS';
 import { Products } from '@/pages/Products';
 import { Sales } from '@/pages/Sales';
 import { Clients } from '@/pages/Clients';
-import { Loader } from 'lucide-react';
 import { RegisterUser } from '@/pages/RegisterUser';
+import { Loader } from 'lucide-react';
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
       retry: 1,
-      staleTime: 5 * 60 * 1000, // 5 minutos
+      staleTime: 1 * 60 * 1000, // 5 minutos
     },
   },
 });
@@ -122,11 +122,6 @@ function App() {
               </ProtectedRoute>
             }
           />
-          <Route path="/register-user" element={
-            <ProtectedRoute>
-              <RegisterUser />
-            </ProtectedRoute>
-          } />
 
           <Route
             path="/clients"
@@ -134,6 +129,18 @@ function App() {
               <ProtectedRoute>
                 <Layout>
                   <Clients />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+
+          {/* ✅ NUEVA RUTA: Gestión de Usuarios */}
+          <Route
+            path="/register-user"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <RegisterUser />
                 </Layout>
               </ProtectedRoute>
             }
