@@ -25,6 +25,7 @@ def generate_sale_code(db: Session):
     ).scalar() or 0
     return f"VENTA-{today}-{count+1:03d}"
 
+# backend/app/api/v1/pos.py - REEMPLAZA LA FUNCIÓN create_sale COMPLETA
 
 @router.post("/sales", response_model=SaleOut, status_code=status.HTTP_201_CREATED)
 def create_sale(
@@ -33,11 +34,18 @@ def create_sale(
     current_user=Depends(role_required("CAJERO", "ADMIN"))
 ):
     """
-    ✅ CORREGIDO #3: Crear venta con validación de stock, pagos y actualización automática.
-    Si el método de pago es CREDITO, client_id es requerido y se asigna correctamente.
+    ✅ CORREGIDO FINAL: Crear venta con validación de stock, pagos y actualización automática.
+    Ahora maneja correctamente:
+    - Pagos mixtos (CRÉDITO + otros métodos)
+    - Asigna CRÉDITO al cliente si existe
+    - Actualiza balance del cliente SOLO para la parte en CRÉDITO
     """
     try:
-        # 1️⃣ Gestionar cliente - ✅ CORREGIDO: Se asigna el cliente seleccionado
+        print(f"\n🚀 INICIANDO CREACIÓN DE VENTA")
+        print(f"   Payload recibido: {payload}")
+        print(f"   Client ID: {payload.client_id}")
+        
+        # 1️⃣ Gestionar cliente
         client = None
         if payload.client_id:
             client = db.query(models.client.Client).filter(
@@ -45,13 +53,9 @@ def create_sale(
             ).first()
             if not client:
                 raise HTTPException(status_code=404, detail="Cliente no encontrado")
-
-        # Si es CREDITO, obligar cliente
-        if payload.payment_method == PaymentMethodEnum.CREDITO:
-            if not payload.client_id:
-                raise HTTPException(status_code=400, detail="client_id es requerido para ventas a CREDITO")
-            if not client:
-                raise HTTPException(status_code=400, detail="Cliente no encontrado para venta a CREDITO")
+            print(f"   ✅ Cliente encontrado: {client.name} (Balance actual: ${client.balance})")
+        else:
+            print(f"   ⚠️ Sin cliente - Público General")
 
         # 2️⃣ Validar productos y calcular totales
         subtotal = 0.0
@@ -87,6 +91,8 @@ def create_sale(
         discount = getattr(payload, "discount_usd", 0.0) or 0.0
         total = round(subtotal - discount, 2)
 
+        print(f"   Subtotal: ${subtotal}, Descuento: ${discount}, Total: ${total}")
+
         # 4️⃣ Crear venta (pendiente inicialmente)
         sale = models.sale.Sale(
             code=generate_sale_code(db),
@@ -102,6 +108,7 @@ def create_sale(
         )
         db.add(sale)
         db.flush()
+        print(f"   ✅ Venta creada: {sale.code}")
 
         # 5️⃣ Crear detalles y actualizar stock
         for detail_data in details_data:
@@ -116,40 +123,91 @@ def create_sale(
             # ✅ Descontar stock
             detail_data['product'].stock -= detail_data['quantity']
 
-        # 6️⃣ Registrar pagos enviados en la creación
+        # 6️⃣ Registrar pagos y calcular totales
         total_paid = 0.0
+        credit_amount = 0.0  # ✅ RASTREAR MONTO EN CRÉDITO
+
+        print(f"\n   📝 Procesando {len(payload.payments) if payload.payments else 0} pagos...")
+
         if payload.payments:
-            for payment_data in payload.payments:
+            for idx, payment_data in enumerate(payload.payments):
                 amount = round(payment_data.amount_usd, 2)
+                method = payment_data.method.value
+                
+                print(f"      Pago {idx+1}: {method} = ${amount}")
+                
                 # ✅ Prevención: no permitir que el pago inicial exceda el total
                 if total_paid + amount > total:
-                    raise HTTPException(status_code=400, detail="El monto de pago inicial excede el total de la venta")
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"El monto de pago ({total_paid + amount}) excede el total ({total})"
+                    )
+                
                 payment = models.payment.Payment(
                     sale_id=sale.id,
-                    method=payment_data.method.value,
+                    method=method,
                     amount_usd=amount,
                     reference=payment_data.reference
                 )
                 db.add(payment)
                 total_paid += amount
 
+                # ✅ CRÍTICO: Rastrear si es CRÉDITO
+                if method == "CREDITO":
+                    credit_amount += amount
+                    print(f"         💳 CRÉDITO detectado: +${amount} (Total crédito: ${credit_amount})")
+
+        print(f"\n   💰 TOTALES DE PAGO:")
+        print(f"      Total pagado: ${total_paid}")
+        print(f"      Total crédito: ${credit_amount}")
+        print(f"      Balance pendiente: ${max(total - total_paid, 0.0)}")
+
         # 7️⃣ Actualizar estado de la venta
         sale.paid_usd = round(total_paid, 2)
         sale.balance_usd = round(max(total - sale.paid_usd, 0.0), 2)
 
+        # ✅ Determinar estado según los pagos
         if sale.balance_usd == 0:
             sale.status = "PAGADO"
+            print(f"      Estado: PAGADO (sin pendientes)")
+        elif credit_amount > 0 and (total_paid == total or total_paid >= credit_amount):
+            sale.status = "CREDITO"
+            print(f"      Estado: CRÉDITO")
         elif sale.paid_usd > 0 and sale.paid_usd < sale.total_usd:
             sale.status = "CREDITO"
+            print(f"      Estado: CRÉDITO (pago parcial)")
         else:
             sale.status = "PENDIENTE"
+            print(f"      Estado: PENDIENTE")
 
-        # 8️⃣ Actualizar balance del cliente si es CREDITO
-        if sale.payment_method == PaymentMethodEnum.CREDITO and client:
-            client.balance = round((client.balance or 0.0) + sale.balance_usd, 2)
+        # 8️⃣ ✅ CRÍTICO: Actualizar balance del cliente SOLO por la parte en CRÉDITO
+        if client and credit_amount > 0:
+            print(f"\n   👤 ACTUALIZANDO CLIENTE:")
+            print(f"      Cliente: {client.name}")
+            print(f"      Balance anterior: ${client.balance}")
+            print(f"      Crédito a agregar: ${credit_amount}")
+            
+            client.balance = round((client.balance or 0.0) + credit_amount, 2)
+            
+            print(f"      ✅ Balance nuevo: ${client.balance}")
+        elif not client and credit_amount > 0:
+            print(f"\n   ⚠️ ADVERTENCIA: Hay crédito (${credit_amount}) pero no hay cliente!")
+        elif client and credit_amount == 0:
+            print(f"\n   ℹ️ Cliente seleccionado pero sin crédito en esta venta")
 
         db.commit()
         db.refresh(sale)
+
+        print(f"\n✅ VENTA COMPLETADA:")
+        print(f"   Código: {sale.code}")
+        print(f"   Cliente: {client.name if client else 'Público General'}")
+        print(f"   Total: ${total}")
+        print(f"   Pagado: ${sale.paid_usd}")
+        print(f"   Crédito: ${credit_amount}")
+        print(f"   Balance pendiente: ${sale.balance_usd}")
+        print(f"   Estado: {sale.status}")
+        if client:
+            print(f"   Balance del cliente: ${client.balance}\n")
 
         # Construir salida
         details_out = []
@@ -164,7 +222,13 @@ def create_sale(
             ))
 
         payments_out = [
-            PaymentOut(id=p.id, method=p.method, amount_usd=p.amount_usd, reference=p.reference, created_at=p.created_at)
+            PaymentOut(
+                id=p.id, 
+                method=p.method, 
+                amount_usd=p.amount_usd, 
+                reference=p.reference, 
+                created_at=p.created_at
+            )
             for p in sale.payments
         ]
 
@@ -190,8 +254,11 @@ def create_sale(
         raise
     except Exception as e:
         db.rollback()
+        print(f"\n❌ ERROR al crear venta: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error al crear venta: {str(e)}")
-
+    
 
 @router.get("/sales/{sale_id}", response_model=SaleOut)
 def get_sale(
