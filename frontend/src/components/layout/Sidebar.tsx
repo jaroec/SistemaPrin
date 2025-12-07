@@ -6,6 +6,7 @@ import {
   Users,
   FileText,
   LogOut,
+  Shield,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import clsx from 'clsx';
@@ -23,6 +24,13 @@ const navigation: NavItem[] = [
   { name: 'Productos', href: '/products', icon: Package },
   { name: 'Ventas', href: '/sales', icon: FileText },
   { name: 'Clientes', href: '/clients', icon: Users },
+  // ✅ NUEVO: Gestión de Usuarios - Solo para ADMIN
+  {
+    name: 'Gestión de Usuarios',
+    href: '/register-user',
+    icon: Shield,
+    roles: ['ADMIN'],
+  },
 ];
 
 export const Sidebar = () => {
@@ -37,7 +45,7 @@ export const Sidebar = () => {
       const confirmed = window.confirm("¿Estás seguro de cerrar sesión?");
       if (!confirmed) return;
 
-      await logout();  // ✅ Llamar a logout
+      await logout();
       localStorage.clear();
       navigate('/login', { replace: true });
     } catch (error) {
@@ -46,6 +54,7 @@ export const Sidebar = () => {
     }
   };
 
+  // ✅ Filtrar navegación por rol
   const filteredNavigation = navigation.filter((item) => {
     if (!item.roles) return true;
     return item.roles.includes(user?.role || '');
@@ -100,7 +109,7 @@ export const Sidebar = () => {
             <p className="text-sm font-medium text-gray-900 truncate">
               {user?.name}
             </p>
-            <p className="text-xs text-gray-500 truncate">{user?.email}</p>
+            <p className="text-xs text-gray-500 truncate">{user?.role}</p>
           </div>
         </div>
 
