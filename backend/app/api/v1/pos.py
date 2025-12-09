@@ -1,4 +1,4 @@
-# backend/app/api/v1/pos.py - VERSIÓN CORREGIDA
+# backend/app/api/v1/pos.py - VERSIÓN MEJORADA CON CRÉDITO CORREGIDO
 from fastapi import APIRouter, Depends, HTTPException, status, Body
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -25,7 +25,6 @@ def generate_sale_code(db: Session):
     ).scalar() or 0
     return f"VENTA-{today}-{count+1:03d}"
 
-# backend/app/api/v1/pos.py - REEMPLAZA LA FUNCIÓN create_sale COMPLETA
 
 @router.post("/sales", response_model=SaleOut, status_code=status.HTTP_201_CREATED)
 def create_sale(
@@ -34,18 +33,17 @@ def create_sale(
     current_user=Depends(role_required("CAJERO", "ADMIN"))
 ):
     """
-    ✅ CORREGIDO FINAL: Crear venta con validación de stock, pagos y actualización automática.
-    Ahora maneja correctamente:
-    - Pagos mixtos (CRÉDITO + otros métodos)
-    - Asigna CRÉDITO al cliente si existe
-    - Actualiza balance del cliente SOLO para la parte en CRÉDITO
+    ✅ NUEVA LÓGICA DE CRÉDITO:
+    - Si TODO es CRÉDITO → Estado PENDIENTE (no PAGADO)
+    - Si hay pago mixto (CRÉDITO + otros) → Estado CREDITO
+    - Si NO hay CRÉDITO y está pagado completo → Estado PAGADO
+    - Asigna deuda al cliente SOLO para la parte en CRÉDITO
     """
     try:
         print(f"\n🚀 INICIANDO CREACIÓN DE VENTA")
         print(f"   Payload recibido: {payload}")
-        print(f"   Client ID: {payload.client_id}")
         
-        # 1️⃣ Gestionar cliente
+        # 1️⃣ Gestionar cliente (OBLIGATORIO si hay CRÉDITO)
         client = None
         if payload.client_id:
             client = db.query(models.client.Client).filter(
@@ -53,9 +51,7 @@ def create_sale(
             ).first()
             if not client:
                 raise HTTPException(status_code=404, detail="Cliente no encontrado")
-            print(f"   ✅ Cliente encontrado: {client.name} (Balance actual: ${client.balance})")
-        else:
-            print(f"   ⚠️ Sin cliente - Público General")
+            print(f"   ✅ Cliente: {client.name} (Balance actual: ${client.balance})")
 
         # 2️⃣ Validar productos y calcular totales
         subtotal = 0.0
@@ -91,12 +87,10 @@ def create_sale(
         discount = getattr(payload, "discount_usd", 0.0) or 0.0
         total = round(subtotal - discount, 2)
 
-        print(f"   Subtotal: ${subtotal}, Descuento: ${discount}, Total: ${total}")
-
         # 4️⃣ Crear venta (pendiente inicialmente)
         sale = models.sale.Sale(
             code=generate_sale_code(db),
-            client_id=client.id if client else None,  # ✅ ASIGNAR CLIENTE SI EXISTE
+            client_id=client.id if client else None,
             seller_id=payload.seller_id,
             subtotal_usd=subtotal,
             discount_usd=discount,
@@ -108,7 +102,6 @@ def create_sale(
         )
         db.add(sale)
         db.flush()
-        print(f"   ✅ Venta creada: {sale.code}")
 
         # 5️⃣ Crear detalles y actualizar stock
         for detail_data in details_data:
@@ -120,26 +113,21 @@ def create_sale(
                 subtotal_usd=detail_data['subtotal_usd']
             )
             db.add(detail)
-            # ✅ Descontar stock
             detail_data['product'].stock -= detail_data['quantity']
 
         # 6️⃣ Registrar pagos y calcular totales
         total_paid = 0.0
-        credit_amount = 0.0  # ✅ RASTREAR MONTO EN CRÉDITO
-
-        print(f"\n   📝 Procesando {len(payload.payments) if payload.payments else 0} pagos...")
+        credit_amount = 0.0
+        has_credit = False
 
         if payload.payments:
-            for idx, payment_data in enumerate(payload.payments):
+            for payment_data in payload.payments:
                 amount = round(payment_data.amount_usd, 2)
                 method = payment_data.method.value
                 
-                print(f"      Pago {idx+1}: {method} = ${amount}")
-                
-                # ✅ Prevención: no permitir que el pago inicial exceda el total
                 if total_paid + amount > total:
                     raise HTTPException(
-                        status_code=400, 
+                        status_code=400,
                         detail=f"El monto de pago ({total_paid + amount}) excede el total ({total})"
                     )
                 
@@ -152,81 +140,74 @@ def create_sale(
                 db.add(payment)
                 total_paid += amount
 
-                # ✅ CRÍTICO: Rastrear si es CRÉDITO
+                # ✅ Detectar si hay CRÉDITO
                 if method == "CREDITO":
+                    has_credit = True
                     credit_amount += amount
-                    print(f"         💳 CRÉDITO detectado: +${amount} (Total crédito: ${credit_amount})")
 
-        print(f"\n   💰 TOTALES DE PAGO:")
-        print(f"      Total pagado: ${total_paid}")
-        print(f"      Total crédito: ${credit_amount}")
-        print(f"      Balance pendiente: ${max(total - total_paid, 0.0)}")
-
-        # 7️⃣ Actualizar estado de la venta
+        # 7️⃣ ✅ NUEVA LÓGICA DE ESTADO
         sale.paid_usd = round(total_paid, 2)
         sale.balance_usd = round(max(total - sale.paid_usd, 0.0), 2)
 
-        # ✅ Determinar estado según los pagos
-        if sale.balance_usd == 0:
-            sale.status = "PAGADO"
-            print(f"      Estado: PAGADO (sin pendientes)")
-        elif credit_amount > 0 and (total_paid == total or total_paid >= credit_amount):
-            sale.status = "CREDITO"
-            print(f"      Estado: CRÉDITO")
-        elif sale.paid_usd > 0 and sale.paid_usd < sale.total_usd:
-            sale.status = "CREDITO"
-            print(f"      Estado: CRÉDITO (pago parcial)")
+        if has_credit:
+            # ✅ VALIDAR QUE HAYA CLIENTE SI HAY CRÉDITO
+            if not client:
+                raise HTTPException(
+                    status_code=400,
+                    detail="⚠️ Cliente requerido para ventas con CRÉDITO"
+                )
+            
+            # Si TODO es crédito (no hay otros pagos)
+            if credit_amount == total:
+                sale.status = "CREDITO"  # ✅ PENDIENTE, NO PAGADO
+                print(f"      Estado: PENDIENTE (100% a crédito)")
+            else:
+                # Hay pago mixto (parte crédito, parte otros)
+                sale.status = "CREDITO"
+                print(f"      Estado: CREDITO (pago mixto)")
         else:
-            sale.status = "PENDIENTE"
-            print(f"      Estado: PENDIENTE")
+            # No hay crédito
+            if sale.balance_usd == 0:
+                sale.status = "PAGADO"
+                print(f"      Estado: PAGADO (sin crédito)")
+            else:
+                sale.status = "PENDIENTE"
+                print(f"      Estado: PENDIENTE (sin pago completo)")
 
-        # 8️⃣ ✅ CRÍTICO: Actualizar balance del cliente SOLO por la parte en CRÉDITO
+        # 8️⃣ ✅ Actualizar balance del cliente SOLO por la parte en CRÉDITO
         if client and credit_amount > 0:
-            print(f"\n   👤 ACTUALIZANDO CLIENTE:")
-            print(f"      Cliente: {client.name}")
-            print(f"      Balance anterior: ${client.balance}")
-            print(f"      Crédito a agregar: ${credit_amount}")
-            
             client.balance = round((client.balance or 0.0) + credit_amount, 2)
-            
-            print(f"      ✅ Balance nuevo: ${client.balance}")
-        elif not client and credit_amount > 0:
-            print(f"\n   ⚠️ ADVERTENCIA: Hay crédito (${credit_amount}) pero no hay cliente!")
-        elif client and credit_amount == 0:
-            print(f"\n   ℹ️ Cliente seleccionado pero sin crédito en esta venta")
+            print(f"   👤 Balance del cliente actualizado: ${client.balance}")
 
         db.commit()
         db.refresh(sale)
 
         print(f"\n✅ VENTA COMPLETADA:")
         print(f"   Código: {sale.code}")
-        print(f"   Cliente: {client.name if client else 'Público General'}")
         print(f"   Total: ${total}")
         print(f"   Pagado: ${sale.paid_usd}")
         print(f"   Crédito: ${credit_amount}")
-        print(f"   Balance pendiente: ${sale.balance_usd}")
-        print(f"   Estado: {sale.status}")
-        if client:
-            print(f"   Balance del cliente: ${client.balance}\n")
+        print(f"   Estado: {sale.status}\n")
 
         # Construir salida
-        details_out = []
-        for d in sale.details:
-            details_out.append(SaleDetailOut(
+        details_out = [
+            SaleDetailOut(
                 id=d.id,
                 product_id=d.product_id,
-                product_name=getattr(d.product, "name", ""),
+                product_name=d.product.name,
                 quantity=d.quantity,
                 price_usd=d.price_usd,
                 subtotal_usd=d.subtotal_usd
-            ))
+            )
+            for d in sale.details
+        ]
 
         payments_out = [
             PaymentOut(
-                id=p.id, 
-                method=p.method, 
-                amount_usd=p.amount_usd, 
-                reference=p.reference, 
+                id=p.id,
+                method=p.method,
+                amount_usd=p.amount_usd,
+                reference=p.reference,
                 created_at=p.created_at
             )
             for p in sale.payments
@@ -254,11 +235,11 @@ def create_sale(
         raise
     except Exception as e:
         db.rollback()
-        print(f"\n❌ ERROR al crear venta: {str(e)}")
+        print(f"\n❌ ERROR: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error al crear venta: {str(e)}")
-    
+
 
 @router.get("/sales/{sale_id}", response_model=SaleOut)
 def get_sale(
@@ -273,7 +254,6 @@ def get_sale(
     if not sale:
         raise HTTPException(status_code=404, detail="Venta no encontrada")
 
-    client = sale.client
     details_out = [
         SaleDetailOut(
             id=d.id,
@@ -290,8 +270,8 @@ def get_sale(
         id=sale.id,
         code=sale.code,
         client_id=sale.client_id,
-        client_name=client.name if client else None,
-        client_phone=client.phone if client else None,
+        client_name=sale.client.name if sale.client else None,
+        client_phone=sale.client.phone if sale.client else None,
         seller_id=sale.seller_id,
         subtotal_usd=sale.subtotal_usd,
         total_usd=sale.total_usd,
@@ -313,7 +293,6 @@ def list_sales(
     db: Session = Depends(get_db),
     current_user=Depends(role_required("CAJERO", "ADMIN"))
 ):
-    """Listar ventas con filtros opcionales"""
     query = db.query(models.sale.Sale)
     
     if status:
@@ -325,7 +304,6 @@ def list_sales(
 
     results = []
     for sale in sales:
-        client = sale.client
         details_out = [
             SaleDetailOut(
                 id=d.id,
@@ -342,54 +320,8 @@ def list_sales(
             id=sale.id,
             code=sale.code,
             client_id=sale.client_id,
-            client_name=client.name if client else None,
-            client_phone=client.phone if client else None,
-            seller_id=sale.seller_id,
-            subtotal_usd=sale.subtotal_usd,
-            total_usd=sale.total_usd,
-            paid_usd=sale.paid_usd,
-            balance_usd=sale.balance_usd,
-            payment_method=sale.payment_method,
-            status=sale.status,
-            details=details_out,
-            payments=sale.payments,
-            created_at=sale.created_at
-        ))
-    
-    return results
-
-
-@router.get("/sales/today", response_model=List[SaleOut])
-def todays_sales(
-    db: Session = Depends(get_db),
-    current_user=Depends(role_required("CAJERO", "ADMIN"))
-):
-    today = date.today()
-    sales = db.query(models.sale.Sale).filter(
-        func.date(models.sale.Sale.created_at) == today
-    ).order_by(models.sale.Sale.created_at.desc()).all()
-
-    results = []
-    for sale in sales:
-        client = sale.client
-        details_out = [
-            SaleDetailOut(
-                id=d.id,
-                product_id=d.product_id,
-                product_name=d.product.name,
-                quantity=d.quantity,
-                price_usd=d.price_usd,
-                subtotal_usd=d.subtotal_usd
-            )
-            for d in sale.details
-        ]
-        
-        results.append(SaleOut(
-            id=sale.id,
-            code=sale.code,
-            client_id=sale.client_id,
-            client_name=client.name if client else None,
-            client_phone=client.phone if client else None,
+            client_name=sale.client.name if sale.client else None,
+            client_phone=sale.client.phone if sale.client else None,
             seller_id=sale.seller_id,
             subtotal_usd=sale.subtotal_usd,
             total_usd=sale.total_usd,
@@ -412,11 +344,7 @@ def annul_sale(
     current_user=Depends(role_required("ADMIN"))
 ):
     """
-    ✅ CORREGIDO #2: ANULAR una venta correctamente
-    - Restaura stock de productos
-    - Devuelve dinero pagado al cliente.balance
-    - Pone paid_usd y balance_usd en 0
-    - No continúa la venta abierta
+    ✅ ANULAR venta: Restaura stock y ajusta balance del cliente
     """
     sale = db.query(models.sale.Sale).filter(models.sale.Sale.id == sale_id).first()
     if not sale:
@@ -425,7 +353,7 @@ def annul_sale(
     if sale.status == "ANULADO":
         raise HTTPException(status_code=400, detail="Venta ya anulada")
 
-    # ✅ Restaurar stock de cada producto
+    # Restaurar stock
     for detail in sale.details:
         product = db.query(models.product.Product).filter(
             models.product.Product.id == detail.product_id
@@ -433,30 +361,30 @@ def annul_sale(
         if product:
             product.stock += detail.quantity
 
-    # ✅ Ajuste financiero correcto:
-    # Si hubo pagos, devolver el dinero al cliente
-    if sale.paid_usd and sale.paid_usd > 0:
-        if sale.client_id:
-            client = db.query(models.client.Client).filter(
-                models.client.Client.id == sale.client_id
-            ).first()
-            if client:
-                # Restar el monto pagado del balance del cliente
-                # (devolución de efectivo o crédito a favor)
-                client.balance = round(max(0, (client.balance or 0.0) - sale.paid_usd), 2)
+    # ✅ Ajustar balance del cliente (restar lo que se había agregado)
+    if sale.client_id and sale.paid_usd > 0:
+        client = db.query(models.client.Client).filter(
+            models.client.Client.id == sale.client_id
+        ).first()
+        if client:
+            # Calcular cuánto era crédito
+            credit_payments = [p for p in sale.payments if p.method == "CREDITO"]
+            credit_total = sum(p.amount_usd for p in credit_payments)
+            
+            # Restar solo el crédito del balance
+            if credit_total > 0:
+                client.balance = round(max(0, client.balance - credit_total), 2)
 
-    # ✅ Poner todo en 0
-    sale.paid_usd = 0.0
-    sale.balance_usd = 0.0
+    # Poner venta en estado ANULADO
     sale.status = "ANULADO"
+    sale.balance_usd = 0.0
 
     db.commit()
 
     return {
         "detail": "Venta anulada correctamente",
         "sale_id": sale_id,
-        "status": "ANULADO",
-        "refund_amount": sale.paid_usd
+        "status": "ANULADO"
     }
 
 
@@ -468,9 +396,7 @@ def pay_sale(
     current_user=Depends(role_required("CAJERO", "ADMIN"))
 ):
     """
-    ✅ CORREGIDO #4: Abonar/pagar crédito validando monto restante
-    - No permite pagar más del balance restante
-    - Valida que el total de pagos no exceda el saldo pendiente
+    ✅ Abonar a venta pendiente
     """
     sale = db.query(models.sale.Sale).filter(
         models.sale.Sale.id == sale_id
@@ -480,31 +406,21 @@ def pay_sale(
         raise HTTPException(status_code=404, detail="Venta no encontrada")
     
     if sale.status == "ANULADO":
-        raise HTTPException(
-            status_code=400,
-            detail="No se puede pagar una venta anulada"
-        )
+        raise HTTPException(status_code=400, detail="No se puede pagar una venta anulada")
 
     if sale.status == "PAGADO":
-        raise HTTPException(
-            status_code=400,
-            detail="Esta venta ya está completamente pagada"
-        )
+        raise HTTPException(status_code=400, detail="Esta venta ya está completamente pagada")
 
-    # ✅ Validar que el total de nuevos pagos no exceda el balance restante
-    total_new_payments = 0.0
-    for payment_data in payments:
-        amount = round(payment_data.amount_usd, 2)
-        total_new_payments += amount
-
-    # ✅ El monto a pagar no puede exceder el balance restante
+    # Validar monto
+    total_new_payments = sum(round(p.amount_usd, 2) for p in payments)
+    
     if total_new_payments > sale.balance_usd:
         raise HTTPException(
             status_code=400,
-            detail=f"El monto total ({total_new_payments}) excede el balance restante ({sale.balance_usd})"
+            detail=f"El monto ({total_new_payments}) excede el balance restante ({sale.balance_usd})"
         )
 
-    # Registrar los pagos
+    # Registrar pagos
     total_paid = sale.paid_usd
     for payment_data in payments:
         amount = round(payment_data.amount_usd, 2)
@@ -523,17 +439,16 @@ def pay_sale(
     # Actualizar estado
     if sale.balance_usd == 0:
         sale.status = "PAGADO"
-    elif sale.paid_usd > 0 and sale.paid_usd < sale.total_usd:
+    elif sale.paid_usd > 0:
         sale.status = "CREDITO"
 
-    # ✅ Actualizar balance del cliente si existe
+    # ✅ Actualizar balance del cliente (restar abono)
     if sale.client_id:
         client = db.query(models.client.Client).filter(
             models.client.Client.id == sale.client_id
         ).first()
         if client:
-            # Restar del balance del cliente
-            client.balance = round(max(0, (client.balance or 0.0) - total_new_payments), 2)
+            client.balance = round(max(0, client.balance - total_new_payments), 2)
 
     db.commit()
     
@@ -552,7 +467,5 @@ def cancel_sale(
     db: Session = Depends(get_db),
     current_user=Depends(role_required("ADMIN"))
 ):
-    """
-    ✅ Alias de annul_sale para compatibilidad
-    """
+    """Alias de annul_sale"""
     return annul_sale(sale_id, db, current_user)
