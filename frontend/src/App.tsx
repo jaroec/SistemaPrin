@@ -1,4 +1,4 @@
-// App.tsx
+// App.tsx - ACTUALIZADO CON NUEVAS RUTAS
 import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -8,9 +8,10 @@ import { Login } from '@/pages/Login';
 import { Dashboard } from '@/pages/Dashboard';
 import { POS } from '@/pages/POS';
 import { Products } from '@/pages/Products';
-import { Sales } from '@/pages/Sales';
+import { Sales } from '@/pages/Sales'; // Ahora es Ventas y Movimientos
 import { Clients } from '@/pages/Clients';
 import { RegisterUser } from '@/pages/RegisterUser';
+// import { ExchangeRate } from '@/pages/ExchangeRate'; // Comentado temporalmente
 import { Loader } from 'lucide-react';
 
 const queryClient = new QueryClient({
@@ -18,12 +19,11 @@ const queryClient = new QueryClient({
     queries: {
       refetchOnWindowFocus: false,
       retry: 1,
-      staleTime: 1 * 60 * 1000, // 5 minutos
+      staleTime: 1 * 60 * 1000,
     },
   },
 });
 
-// ✅ Componente de Loading
 function LoadingScreen() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -35,7 +35,6 @@ function LoadingScreen() {
   );
 }
 
-// ✅ Ruta protegida mejorada
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuthStore();
 
@@ -46,7 +45,6 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
 }
 
-// ✅ Ruta pública (redirige si ya está autenticado)
 function PublicRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuthStore();
 
@@ -112,6 +110,7 @@ function App() {
             }
           />
 
+          {/* ✅ RENOMBRADO: Ventas y Movimientos */}
           <Route
             path="/sales"
             element={
@@ -134,7 +133,19 @@ function App() {
             }
           />
 
-          {/* ✅ NUEVA RUTA: Gestión de Usuarios */}
+          {/* ✅ NUEVA: Tasa de Cambio */}
+          {/* <Route
+            path="/exchange-rate"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <ExchangeRate />
+                </Layout>
+              </ProtectedRoute>
+            }
+          /> */}
+
+          {/* Gestión de Usuarios (Solo ADMIN) */}
           <Route
             path="/register-user"
             element={
@@ -146,7 +157,7 @@ function App() {
             }
           />
 
-          {/* Redirect a POS por defecto */}
+          {/* Redirect por defecto */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
