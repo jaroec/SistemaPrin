@@ -1,4 +1,4 @@
-// components/layout/Layout.tsx
+// components/layout/Layout.tsx - ACTUALIZADO
 import { ReactNode, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { 
@@ -9,7 +9,8 @@ import {
   FileText, 
   LogOut,
   Menu,
-  Shield
+  Shield,
+  DollarSign // ✅ NUEVO ÍCONO
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import clsx from 'clsx';
@@ -29,9 +30,16 @@ const navigation: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { name: 'Punto de Venta', href: '/', icon: ShoppingCart },
   { name: 'Productos', href: '/products', icon: Package },
-  { name: 'Ventas', href: '/sales', icon: FileText },
+  { name: 'Ventas y Movimientos', href: '/sales', icon: FileText }, // ✅ RENOMBRADO
   { name: 'Clientes', href: '/clients', icon: Users },
-  // ✅ NUEVO: Gestión de Usuarios - Solo para ADMIN
+  // ✅ NUEVO: Tasa de Cambio
+  {
+    name: 'Tasa de Cambio',
+    href: '/exchange-rate',
+    icon: DollarSign,
+    roles: ['ADMIN', 'CAJERO'], // Visible para Admin y Cajero
+  },
+  // Gestión de Usuarios - Solo ADMIN
   {
     name: 'Gestión de Usuarios',
     href: '/register-user',
@@ -76,7 +84,7 @@ const Sidebar = () => {
           </div>
           <div>
             <h1 className="text-xl font-bold text-gray-900">FinkuPOS</h1>
-            <p className="text-xs text-gray-500">v1.0</p>
+            <p className="text-xs text-gray-500">v2.0</p>
           </div>
         </Link>
       </div>
