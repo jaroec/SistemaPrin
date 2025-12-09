@@ -1,12 +1,11 @@
-// pages/Sales.tsx - VERSIÓN ACTUALIZADA CON ACCIONES
+// frontend/src/pages/SalesMovements.tsx - VENTAS Y MOVIMIENTOS
 import { useState } from 'react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
-import { Search, FileText, Eye, X as XIcon, AlertCircle } from 'lucide-react';
+import { Search, FileText, Eye, X as XIcon, AlertCircle, Receipt } from 'lucide-react';
 import { salesApi } from '@/api/sales';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
-import { SalePaymentModal } from '@/components/sales/SalePaymentModal';
 import { formatCurrency, formatDateTime } from '@/utils/format';
 import { Sale, SaleStatus } from '@/types';
 
@@ -14,8 +13,6 @@ export const Sales = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<SaleStatus | 'ALL'>('ALL');
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
-  const [showPaymentModal, setShowPaymentModal] = useState(false);
-  const [selectedSaleForPayment, setSelectedSaleForPayment] = useState<Sale | null>(null);
 
   const queryClient = useQueryClient();
 
@@ -24,11 +21,11 @@ export const Sales = () => {
     queryFn: salesApi.getAll,
   });
 
-  // ✅ MUTACIÓN PARA ANULAR VENTA
+  // ✅ MUTACIÓN PARA ANULAR
   const annulMutation = useMutation({
     mutationFn: (id: number) => salesApi.cancel(id),
     onSuccess: () => {
-      alert('✅ Venta anulada correctamente. Stock restaurado.');
+      alert('✅ Venta anulada. Stock restaurado y balance ajustado.');
       queryClient.invalidateQueries({ queryKey: ['sales'] });
       setSelectedSale(null);
     },
@@ -40,16 +37,11 @@ export const Sales = () => {
 
   const handleAnnul = (id: number) => {
     const confirmed = confirm(
-      '⚠️ ¿Estás seguro de anular esta venta? Se restaurará el stock y se ajustarán los montos.'
+      '⚠️ ¿Anular esta venta?\n\n• Se restaurará el stock\n• Se ajustarán los balances\n• NO se puede revertir'
     );
     if (!confirmed) return;
 
     annulMutation.mutate(id);
-  };
-
-  const handleOpenPaymentModal = (sale: Sale) => {
-    setSelectedSaleForPayment(sale);
-    setShowPaymentModal(true);
   };
 
   const filteredSales = sales.filter((sale) => {
@@ -63,43 +55,49 @@ export const Sales = () => {
   });
 
   const stats = {
-    total: sales.reduce((sum, s) => sum + s.total_usd, 0),
-    paid: sales.reduce((sum, s) => sum + s.paid_usd, 0),
-    pending: sales.reduce((sum, s) => sum + s.balance_usd, 0),
-    count: sales.length,
+    ingresos: sales
+      .filter((s) => s.status !== 'ANULADO')
+      .reduce((sum, s) => sum + s.total_usd, 0),
+    cobrado: sales.reduce((sum, s) => sum + s.paid_usd, 0),
+    porCobrar: sales
+      .filter((s) => s.status === 'CREDITO' || s.status === 'PENDIENTE')
+      .reduce((sum, s) => sum + s.balance_usd, 0),
+    anuladas: sales.filter((s) => s.status === 'ANULADO').length,
   };
 
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold text-gray-900">Ventas</h1>
-        <p className="text-gray-600 mt-1">Historial de todas las ventas</p>
+        <h1 className="text-3xl font-bold text-gray-900">Ventas y Movimientos</h1>
+        <p className="text-gray-600 mt-1">
+          Historial de ventas, ingresos y movimientos financieros
+        </p>
       </div>
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card padding="md">
-          <p className="text-sm text-gray-600 mb-1">Total Ventas</p>
-          <p className="text-2xl font-bold text-gray-900">{stats.count}</p>
-        </Card>
-        <Card padding="md">
-          <p className="text-sm text-gray-600 mb-1">Monto Total</p>
+          <p className="text-sm text-gray-600 mb-1">Ingresos Totales</p>
           <p className="text-2xl font-bold text-primary-600">
-            {formatCurrency(stats.total)}
+            {formatCurrency(stats.ingresos)}
           </p>
         </Card>
         <Card padding="md">
           <p className="text-sm text-gray-600 mb-1">Cobrado</p>
           <p className="text-2xl font-bold text-green-600">
-            {formatCurrency(stats.paid)}
+            {formatCurrency(stats.cobrado)}
           </p>
         </Card>
         <Card padding="md">
           <p className="text-sm text-gray-600 mb-1">Por Cobrar</p>
           <p className="text-2xl font-bold text-orange-600">
-            {formatCurrency(stats.pending)}
+            {formatCurrency(stats.porCobrar)}
           </p>
+        </Card>
+        <Card padding="md">
+          <p className="text-sm text-gray-600 mb-1">Anuladas</p>
+          <p className="text-2xl font-bold text-red-600">{stats.anuladas}</p>
         </Card>
       </div>
 
@@ -239,14 +237,16 @@ export const Sales = () => {
                     </td>
 
                     <td className="px-6 py-4 whitespace-nowrap text-right">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setSelectedSale(sale)}
-                      >
-                        <Eye className="w-4 h-4 mr-1" />
-                        Ver
-                      </Button>
+                      <div className="flex items-center justify-end gap-2">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setSelectedSale(sale)}
+                        >
+                          <Eye className="w-4 h-4 mr-1" />
+                          Ver
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -256,42 +256,34 @@ export const Sales = () => {
         </Card>
       )}
 
-      {/* ✅ MODAL DE DETALLE DE VENTA */}
+      {/* ✅ MODAL DE DETALLE (SOLO VER Y ANULAR) */}
       {selectedSale && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            {/* HEADER - CON ACCIONES */}
+            {/* HEADER */}
             <div className="p-6 border-b border-gray-200 flex items-center justify-between sticky top-0 bg-white z-10">
-              <div>
-                <h2 className="text-2xl font-bold text-gray-900">{selectedSale.code}</h2>
-                <p className="text-sm text-gray-600 mt-1">
-                  {formatDateTime(selectedSale.created_at)}
-                </p>
+              <div className="flex items-center gap-3">
+                <Receipt className="w-6 h-6 text-primary-600" />
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900">{selectedSale.code}</h2>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {formatDateTime(selectedSale.created_at)}
+                  </p>
+                </div>
               </div>
 
               <div className="flex items-center gap-2">
-                {/* ✅ BOTÓN ANULAR */}
+                {/* ✅ SOLO ANULAR (NO PAGAR) */}
                 {selectedSale.status !== 'ANULADO' && (
                   <button
                     onClick={() => handleAnnul(selectedSale.id)}
                     disabled={annulMutation.isPending}
                     className="px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
                   >
-                    {annulMutation.isPending ? 'Anulando...' : 'Anular'}
+                    {annulMutation.isPending ? 'Anulando...' : 'Anular Venta'}
                   </button>
                 )}
 
-                {/* ✅ BOTÓN PAGAR */}
-                {selectedSale.balance_usd > 0 && selectedSale.status !== 'ANULADO' && (
-                  <button
-                    onClick={() => handleOpenPaymentModal(selectedSale)}
-                    className="px-3 py-2 text-sm font-medium text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                  >
-                    Abonar
-                  </button>
-                )}
-
-                {/* Cerrar */}
                 <button
                   onClick={() => setSelectedSale(null)}
                   className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
@@ -303,14 +295,13 @@ export const Sales = () => {
 
             {/* CONTENIDO */}
             <div className="p-6 space-y-6">
-              {/* Alerta si está anulada */}
               {selectedSale.status === 'ANULADO' && (
                 <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex gap-3">
                   <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
                   <div>
                     <p className="font-medium text-red-900">Venta Anulada</p>
                     <p className="text-sm text-red-700 mt-1">
-                      Esta venta ha sido anulada. El stock se restauró y los montos fueron ajustados.
+                      Esta venta ha sido anulada. Stock restaurado y balances ajustados.
                     </p>
                   </div>
                 </div>
@@ -350,10 +341,12 @@ export const Sales = () => {
                 </div>
               </div>
 
-              {/* Pagos realizados */}
+              {/* Pagos */}
               {selectedSale.payments.length > 0 && (
                 <div>
-                  <h3 className="text-sm font-medium text-gray-500 mb-3">Pagos Registrados</h3>
+                  <h3 className="text-sm font-medium text-gray-500 mb-3">
+                    Pagos Registrados
+                  </h3>
                   <div className="space-y-2">
                     {selectedSale.payments.map((payment, index) => (
                       <div
@@ -396,7 +389,9 @@ export const Sales = () => {
 
                 <div className="flex justify-between text-green-600">
                   <span>Pagado:</span>
-                  <span className="font-semibold">{formatCurrency(selectedSale.paid_usd)}</span>
+                  <span className="font-semibold">
+                    {formatCurrency(selectedSale.paid_usd)}
+                  </span>
                 </div>
 
                 {selectedSale.balance_usd > 0 && (
@@ -411,23 +406,6 @@ export const Sales = () => {
             </div>
           </div>
         </div>
-      )}
-
-      {/* ✅ MODAL DE PAGO */}
-      {showPaymentModal && selectedSaleForPayment && (
-        <SalePaymentModal
-          sale={selectedSaleForPayment}
-          onClose={() => {
-            setShowPaymentModal(false);
-            setSelectedSaleForPayment(null);
-          }}
-          onSuccess={() => {
-            setShowPaymentModal(false);
-            setSelectedSaleForPayment(null);
-            queryClient.invalidateQueries({ queryKey: ['sales'] });
-            setSelectedSale(null);
-          }}
-        />
       )}
     </div>
   );
