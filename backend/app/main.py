@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from seed import seed_admin
-from app.api.v1 import products, clients, auth, pos, reports, search, dashboard
+from app.api.v1 import products, clients, auth, pos, reports, search, dashboard, exchange_rate
 from app.db.base import Base, engine
 
 # Crear tablas (solo para desarrollo; en producción usar alembic)
@@ -32,6 +32,7 @@ app.include_router(clients.router, prefix="/api/v1/clients", tags=["👥 Cliente
 app.include_router(pos.router, prefix="/api/v1/pos", tags=["🛒 Punto de Venta"])
 app.include_router(reports.router, prefix="/api/v1", tags=["📊 Reportes"])
 app.include_router(dashboard.router, prefix="/api/v1", tags=["📈 Dashboard"])
+app.include_router(exchange_rate.router, prefix="/api/v1", tags=["💱 Tasa de Cambio"])
 
 # Seed del usuario admin
 @app.on_event("startup")
@@ -72,6 +73,7 @@ def custom_openapi():
     public_paths = [
         "/api/v1/auth/token",
         "/api/v1/auth/register",
+        "/api/v1/exchange-rate/today",  # ✅ Público para el POS
         "/",
         "/health",
         "/docs",
