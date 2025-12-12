@@ -1,4 +1,4 @@
-# backend/app/api/v1/pos.py - VERSIÓN MEJORADA CON CRÉDITO CORREGIDO
+# backend/app/api/v1/pos.py - VERSIÓN MEJORADA CON VALIDACIÓN DE CRÉDITO
 from fastapi import APIRouter, Depends, HTTPException, status, Body
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -33,8 +33,9 @@ def create_sale(
     current_user=Depends(role_required("CAJERO", "ADMIN"))
 ):
     """
-    ✅ NUEVA LÓGICA DE CRÉDITO:
-    - Si TODO es CRÉDITO → Estado PENDIENTE (no PAGADO)
+    ✅ NUEVA LÓGICA DE CRÉDITO CON VALIDACIÓN:
+    - Valida límite de crédito ANTES de crear venta
+    - Si TODO es CRÉDITO → Estado CREDITO (no PAGADO)
     - Si hay pago mixto (CRÉDITO + otros) → Estado CREDITO
     - Si NO hay CRÉDITO y está pagado completo → Estado PAGADO
     - Asigna deuda al cliente SOLO para la parte en CRÉDITO
@@ -87,7 +88,35 @@ def create_sale(
         discount = getattr(payload, "discount_usd", 0.0) or 0.0
         total = round(subtotal - discount, 2)
 
-        # 4️⃣ Crear venta (pendiente inicialmente)
+        # 4️⃣ ✅ DETECTAR CRÉDITO Y VALIDAR LÍMITE
+        has_credit = False
+        credit_amount = 0.0
+        
+        if payload.payments:
+            for payment_data in payload.payments:
+                if payment_data.method == PaymentMethodEnum.CREDITO:
+                    has_credit = True
+                    credit_amount += payment_data.amount_usd
+
+        # ✅ VALIDAR CRÉDITO
+        if has_credit:
+            # Crédito requiere cliente
+            if not client:
+                raise HTTPException(
+                    status_code=400,
+                    detail="⚠️ Cliente requerido para ventas con CRÉDITO"
+                )
+            
+            # Validar límite de crédito disponible
+            available_credit = client.credit_limit - client.balance
+            if credit_amount > available_credit:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"⚠️ Crédito insuficiente. Disponible: ${available_credit:.2f}, Solicitado: ${credit_amount:.2f}"
+                )
+            print(f"   ✅ Validación crédito OK: ${credit_amount:.2f} ≤ ${available_credit:.2f}")
+
+        # 5️⃣ Crear venta (pendiente inicialmente)
         sale = models.sale.Sale(
             code=generate_sale_code(db),
             client_id=client.id if client else None,
@@ -103,7 +132,7 @@ def create_sale(
         db.add(sale)
         db.flush()
 
-        # 5️⃣ Crear detalles y actualizar stock
+        # 6️⃣ Crear detalles y actualizar stock
         for detail_data in details_data:
             detail = models.sale_detail.SaleDetail(
                 sale_id=sale.id,
@@ -115,10 +144,8 @@ def create_sale(
             db.add(detail)
             detail_data['product'].stock -= detail_data['quantity']
 
-        # 6️⃣ Registrar pagos y calcular totales
+        # 7️⃣ Registrar pagos y calcular totales
         total_paid = 0.0
-        credit_amount = 0.0
-        has_credit = False
 
         if payload.payments:
             for payment_data in payload.payments:
@@ -140,53 +167,48 @@ def create_sale(
                 db.add(payment)
                 total_paid += amount
 
-                # ✅ Detectar si hay CRÉDITO
-                if method == "CREDITO":
-                    has_credit = True
-                    credit_amount += amount
-
-        # 7️⃣ ✅ NUEVA LÓGICA DE ESTADO
+        # 8️⃣ ✅ NUEVA LÓGICA DE ESTADO - CORREGIDA
         sale.paid_usd = round(total_paid, 2)
         sale.balance_usd = round(max(total - sale.paid_usd, 0.0), 2)
 
         if has_credit:
-            # ✅ VALIDAR QUE HAYA CLIENTE SI HAY CRÉDITO
-            if not client:
-                raise HTTPException(
-                    status_code=400,
-                    detail="⚠️ Cliente requerido para ventas con CRÉDITO"
-                )
-            
-            # Si TODO es crédito (no hay otros pagos)
-            if credit_amount == total:
-                sale.status = "CREDITO"  # ✅ PENDIENTE, NO PAGADO
-                print(f"      Estado: PENDIENTE (100% a crédito)")
+            # ✅ IMPORTANTE: Si hay crédito, SIEMPRE es CREDITO o PENDIENTE
+            if credit_amount == total and total_paid == 0:
+                # 100% crédito, sin otros pagos → PENDIENTE
+                sale.status = "PENDIENTE"
+                print(f"      Estado: PENDIENTE (100% crédito, nada pagado)")
             else:
-                # Hay pago mixto (parte crédito, parte otros)
+                # Hay crédito + otros pagos (mixto) → CREDITO
                 sale.status = "CREDITO"
                 print(f"      Estado: CREDITO (pago mixto)")
         else:
             # No hay crédito
             if sale.balance_usd == 0:
                 sale.status = "PAGADO"
-                print(f"      Estado: PAGADO (sin crédito)")
+                print(f"      Estado: PAGADO (sin crédito, pagado completo)")
             else:
                 sale.status = "PENDIENTE"
-                print(f"      Estado: PENDIENTE (sin pago completo)")
+                print(f"      Estado: PENDIENTE (sin crédito, pago parcial)")
 
-        # 8️⃣ ✅ Actualizar balance del cliente SOLO por la parte en CRÉDITO
+        # 9️⃣ ✅ Actualizar balance del cliente Y REDUCIR LÍMITE DISPONIBLE
         if client and credit_amount > 0:
+            # Agregar la deuda
             client.balance = round((client.balance or 0.0) + credit_amount, 2)
-            print(f"   👤 Balance del cliente actualizado: ${client.balance}")
+            # ✅ NUEVO: También reducir el límite disponible
+            # (El límite disponible = credit_limit - balance)
+            # Esto se calcula automáticamente cuando se consulta
+            print(f"   👤 Balance del cliente actualizado: ${client.balance:.2f}")
+            print(f"   👤 Límite disponible ahora: ${client.credit_limit - client.balance:.2f}")
 
         db.commit()
         db.refresh(sale)
 
         print(f"\n✅ VENTA COMPLETADA:")
         print(f"   Código: {sale.code}")
-        print(f"   Total: ${total}")
-        print(f"   Pagado: ${sale.paid_usd}")
-        print(f"   Crédito: ${credit_amount}")
+        print(f"   Total: ${total:.2f}")
+        print(f"   Pagado: ${sale.paid_usd:.2f}")
+        print(f"   Crédito: ${credit_amount:.2f}")
+        print(f"   Balance Pendiente: ${sale.balance_usd:.2f}")
         print(f"   Estado: {sale.status}\n")
 
         # Construir salida
