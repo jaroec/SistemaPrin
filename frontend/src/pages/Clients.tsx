@@ -364,18 +364,21 @@ export const Clients = () => {
                       </div>
 
                       {/* Acciones */}
-                      {sale.status !== 'ANULADO' && (
-                        <div className="flex gap-2 pt-3 border-t border-gray-200">
-                          {sale.balance_usd > 0 && (
-                            <Button
-                              size="sm"
-                              onClick={() => setSelectedSaleForPayment(sale)}
-                              className="flex-1"
-                            >
-                              <DollarSign className="w-4 h-4 mr-1" />
-                              Abonar
-                            </Button>
-                          )}
+                      <div className="flex gap-2 pt-3 border-t border-gray-200">
+                        {/* ✅ BOTÓN DE ABONAR - NUEVO */}
+                        {sale.balance_usd > 0 && sale.status !== "ANULADO" && (
+                          <Button
+                            size="sm"
+                            onClick={() => setSelectedSaleForPayment(sale)}
+                            className="flex-1"
+                          >
+                            <DollarSign className="w-4 h-4 mr-1" />
+                            Abonar
+                          </Button>
+                        )}
+                        
+                        {/* ✅ BOTÓN ANULAR */}
+                        {sale.status !== "ANULADO" && (
                           <Button
                             size="sm"
                             variant="danger"
@@ -385,16 +388,22 @@ export const Clients = () => {
                           >
                             Anular
                           </Button>
-                        </div>
-                      )}
+                        )}
 
-                      {sale.status === 'ANULADO' && (
-                        <div className="p-3 bg-red-50 border border-red-200 rounded-lg mt-3">
-                          <p className="text-sm text-red-700">
-                            ⚠️ Venta anulada. No se puede modificar.
-                          </p>
-                        </div>
-                      )}
+                        {/* ✅ MENSAJE SI YA ESTÁ PAGADO */}
+                        {sale.status === "PAGADO" && (
+                          <div className="w-full p-2 bg-green-50 rounded-lg text-center">
+                            <p className="text-xs text-green-700 font-medium">✓ Pagado</p>
+                          </div>
+                        )}
+
+                        {/* ✅ MENSAJE SI ESTÁ ANULADO */}
+                        {sale.status === "ANULADO" && (
+                          <div className="w-full p-2 bg-red-50 rounded-lg text-center">
+                            <p className="text-xs text-red-700 font-medium">✗ Anulado</p>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
