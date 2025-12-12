@@ -1,19 +1,35 @@
+// components/pos/PaymentModal.tsx - CON CONVERSIÓN DE MONEDA
 import { useState, useEffect } from 'react';
-import { X, DollarSign, CreditCard, Smartphone, Banknote, User, Search, AlertCircle } from 'lucide-react';
+import { X, DollarSign, CreditCard, Smartphone, Banknote, User, Search, AlertCircle, TrendingUp } from 'lucide-react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useCartStore } from '@/store/cartStore';
 import { useAuthStore } from '@/store/authStore';
 import { salesApi } from '@/api/sales';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { Card } from '@/components/ui/Card';
 import { formatCurrency } from '@/utils/format';
 import { PaymentMethod, Payment, Client } from '@/types';
 import api from '@/api/axios';
 
-interface PaymentModalProps {
-  onClose: () => void;
-  onSuccess: () => void;
+interface ExchangeRate {
+  rate: number;
+  date: string;
 }
+
+const exchangeRateApi = {
+  getToday: async (): Promise<ExchangeRate> => {
+    const response = await api.get('/api/v1/exchange-rate/today');
+    return response.data;
+  },
+};
+
+const clientsApi = {
+  getAll: async (): Promise<Client[]> => {
+    const response = await api.get('/api/v1/clients');
+    return response.data;
+  },
+};
 
 const paymentMethods: { value: PaymentMethod; label: string; icon: any }[] = [
   { value: 'EFECTIVO', label: 'Efectivo', icon: DollarSign },
@@ -23,27 +39,31 @@ const paymentMethods: { value: PaymentMethod; label: string; icon: any }[] = [
   { value: 'CREDITO', label: 'Crédito', icon: User },
 ];
 
-const clientsApi = {
-  getAll: async (): Promise<Client[]> => {
-    const response = await api.get('/api/v1/clients');
-    return response.data;
-  },
-};
+interface PaymentModalProps {
+  onClose: () => void;
+  onSuccess: () => void;
+}
 
 export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
   const { items, getTotal, clearCart } = useCartStore();
   const { user } = useAuthStore();
-  
+
   const [selectedMethod, setSelectedMethod] = useState<PaymentMethod>('EFECTIVO');
-  const [amount, setAmount] = useState(getTotal().toString());
+  const [amount, setAmount] = useState('');
   const [reference, setReference] = useState('');
   const [payments, setPayments] = useState<Payment[]>([]);
   const [error, setError] = useState('');
-  
-  // ✅ Estados para CRÉDITO
+
+  // Estados para CRÉDITO
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [showClientSearch, setShowClientSearch] = useState(false);
+
+  // Obtener tasa de cambio
+  const { data: exchangeRate } = useQuery({
+    queryKey: ['exchange-rate-today'],
+    queryFn: exchangeRateApi.getToday,
+  });
 
   // Obtener clientes
   const { data: allClients = [] } = useQuery({
@@ -51,16 +71,12 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
     queryFn: clientsApi.getAll,
   });
 
-  const total = getTotal();
-  const totalPaid = payments.reduce((sum, p) => sum + p.amount_usd, 0);
-  const remaining = total - totalPaid;
-  
-  // ✅ NUEVO: Calcular monto en crédito
-  const creditAmount = payments
-    .filter(p => p.method === 'CREDITO')
-    .reduce((sum, p) => sum + p.amount_usd, 0);
+  // Inicializar monto con el total
+  useEffect(() => {
+    setAmount(getTotal().toFixed(2));
+  }, [getTotal]);
 
-  // ✅ Mostrar búsqueda de cliente SOLO si es CRÉDITO
+  // Mostrar búsqueda de cliente SOLO si es CRÉDITO
   useEffect(() => {
     if (selectedMethod === 'CREDITO') {
       setShowClientSearch(true);
@@ -84,10 +100,23 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
     },
   });
 
+  const total = getTotal();
+  const totalPaid = payments.reduce((sum, p) => sum + p.amount_usd, 0);
+  const remaining = total - totalPaid;
+
+  // Conversiones a VES
+  const totalVES = exchangeRate ? total * exchangeRate.rate : 0;
+  const totalPaidVES = exchangeRate ? totalPaid * exchangeRate.rate : 0;
+  const remainingVES = exchangeRate ? remaining * exchangeRate.rate : 0;
+
+  const creditAmount = payments
+    .filter((p) => p.method === 'CREDITO')
+    .reduce((sum, p) => sum + p.amount_usd, 0);
+
   const handleAddPayment = () => {
     setError('');
     const amountNum = parseFloat(amount);
-    
+
     if (isNaN(amountNum) || amountNum <= 0) {
       setError('Ingrese un monto válido');
       return;
@@ -98,7 +127,6 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
       return;
     }
 
-    // ✅ Si es CRÉDITO, OBLIGAR a seleccionar cliente
     if (selectedMethod === 'CREDITO' && !selectedClient) {
       setError('⚠️ Debe seleccionar un cliente para venta a CRÉDITO');
       return;
@@ -130,29 +158,26 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
   const handleCompleteSale = () => {
     setError('');
 
-    // ✅ Validar que haya pagos
     if (payments.length === 0) {
       setError('Debe registrar al menos un pago');
       return;
     }
 
-    // ✅ Si hay CRÉDITO en los pagos, VALIDAR cliente
-    const hasCreditPayment = payments.some(p => p.method === 'CREDITO');
+    const hasCreditPayment = payments.some((p) => p.method === 'CREDITO');
     if (hasCreditPayment && !selectedClient) {
       setError('⚠️ Cliente requerido para venta con CRÉDITO');
       return;
     }
 
-    // ✅ Crear la venta con cliente si es CRÉDITO
     createSaleMutation.mutate({
       seller_id: user!.id,
       payment_method: payments.length > 1 ? 'MIXTO' : (payments[0]?.method || 'EFECTIVO') as PaymentMethod,
-      items: items.map(item => ({
+      items: items.map((item) => ({
         product_id: item.product.id,
         quantity: item.quantity,
       })),
       payments: payments,
-      client_id: selectedClient?.id, // ✅ ENVIAR CLIENTE SI ESTÁ SELECCIONADO
+      client_id: selectedClient?.id,
     });
   };
 
@@ -186,33 +211,79 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
             </div>
           )}
 
-          {/* Total a Pagar */}
-          <div className="bg-primary-50 rounded-xl p-6">
-            <p className="text-sm text-primary-700 mb-1">Total a Pagar</p>
-            <p className="text-4xl font-bold text-primary-900">
-              {formatCurrency(total)}
-            </p>
-            {totalPaid > 0 && (
-              <div className="mt-3 pt-3 border-t border-primary-200 space-y-1">
-                <div className="flex justify-between text-sm">
-                  <span className="text-primary-700">Pagado:</span>
-                  <span className="font-semibold">{formatCurrency(totalPaid)}</span>
+          {/* Información de Pago - Principal */}
+          <div className="space-y-4">
+            {/* Total en USD */}
+            <Card padding="md" className="bg-gradient-to-br from-primary-50 to-primary-100 border border-primary-200">
+              <div>
+                <p className="text-sm text-primary-700 mb-2 font-medium">Total a Pagar (USD)</p>
+                <p className="text-4xl font-bold text-primary-900">
+                  {formatCurrency(total)}
+                </p>
+              </div>
+            </Card>
+
+            {/* Conversión a VES */}
+            {exchangeRate && (
+              <Card padding="md" className="bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-200">
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-orange-700 font-medium">
+                    <TrendingUp className="w-5 h-5" />
+                    <span>Equivalente en Bolívares</span>
+                  </div>
+                  <p className="text-4xl font-bold text-orange-600">
+                    {formatCurrency(totalVES)}
+                  </p>
+                  <p className="text-xs text-orange-600 pt-2 border-t border-orange-200">
+                    Tasa aplicada: 1 USD = {exchangeRate.rate.toFixed(2)} Bs
+                  </p>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-primary-700">Pendiente:</span>
-                  <span className="font-semibold">{formatCurrency(remaining)}</span>
+              </Card>
+            )}
+
+            {/* Estado de Pagos Registrados */}
+            {totalPaid > 0 && (
+              <div className="grid grid-cols-3 gap-2">
+                <div className="p-3 bg-green-50 rounded-lg text-center">
+                  <p className="text-xs text-green-700 mb-1">Pagado USD</p>
+                  <p className="font-bold text-green-600 text-sm">
+                    {formatCurrency(totalPaid)}
+                  </p>
+                  {exchangeRate && (
+                    <p className="text-xs text-green-600 mt-1">
+                      {formatCurrency(totalPaidVES)}
+                    </p>
+                  )}
+                </div>
+                <div className="p-3 bg-orange-50 rounded-lg text-center">
+                  <p className="text-xs text-orange-700 mb-1">Falta USD</p>
+                  <p className="font-bold text-orange-600 text-sm">
+                    {formatCurrency(remaining)}
+                  </p>
+                  {exchangeRate && (
+                    <p className="text-xs text-orange-600 mt-1">
+                      {formatCurrency(remainingVES)}
+                    </p>
+                  )}
                 </div>
                 {creditAmount > 0 && (
-                  <div className="flex justify-between text-sm pt-1 border-t border-primary-200 mt-1">
-                    <span className="text-orange-700 font-medium">A Crédito del Cliente:</span>
-                    <span className="font-bold text-orange-700">{formatCurrency(creditAmount)}</span>
+                  <div className="p-3 bg-purple-50 rounded-lg text-center">
+                    <p className="text-xs text-purple-700 mb-1">A Crédito</p>
+                    <p className="font-bold text-purple-600 text-sm">
+                      {formatCurrency(creditAmount)}
+                    </p>
+                    {exchangeRate && (
+                      <p className="text-xs text-purple-600 mt-1">
+                        {formatCurrency(creditAmount * exchangeRate.rate)}
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
             )}
           </div>
 
-          {/* ✅ SELECTOR DE CLIENTE - SOLO CUANDO ES CRÉDITO */}
+          {/* Selector de Cliente para Crédito */}
           {showClientSearch && (
             <div className="space-y-3 border-2 border-orange-200 bg-orange-50 p-4 rounded-xl">
               <div className="flex items-center gap-2">
@@ -221,12 +292,9 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
                   Seleccionar Cliente (Requerido para Crédito)
                 </h3>
               </div>
-              <p className="text-xs text-orange-700">
-                El monto en crédito se asignará al saldo del cliente
-              </p>
-              
+
               {selectedClient ? (
-                <div className="p-4 border-2 border-primary-300 bg-primary-50 rounded-lg flex items-center justify-between">
+                <div className="p-4 border-2 border-primary-300 bg-white rounded-lg flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 bg-primary-600 rounded-full flex items-center justify-center">
                       <User className="w-5 h-5 text-white" />
@@ -237,7 +305,7 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
                         <p className="text-sm text-primary-700">{selectedClient.phone}</p>
                       )}
                       <p className="text-xs text-gray-600 mt-1">
-                        Saldo actual: <span className="font-semibold">${selectedClient.balance.toFixed(2)}</span>
+                        Balance actual: <span className="font-semibold">${selectedClient.balance.toFixed(2)}</span>
                       </p>
                     </div>
                   </div>
@@ -258,11 +326,11 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
                     type="text"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    placeholder="Buscar cliente por nombre, email o teléfono..."
+                    placeholder="Buscar cliente..."
                     className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
                     autoFocus
                   />
-                  
+
                   {searchTerm && (
                     <div className="absolute z-50 w-full mt-2 bg-white rounded-lg shadow-lg border border-gray-200 max-h-64 overflow-y-auto">
                       {filteredClients.length > 0 ? (
@@ -273,7 +341,7 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
                             className="w-full text-left p-3 hover:bg-gray-50 border-b border-gray-100 last:border-b-0 transition-colors"
                           >
                             <p className="font-medium text-gray-900">{c.name}</p>
-                            <div className="flex gap-3 mt-1 text-xs text-gray-600">
+                            <div className="flex gap-2 mt-1 text-xs text-gray-600">
                               {c.phone && <span>{c.phone}</span>}
                               {c.email && (
                                 <>
@@ -283,10 +351,12 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
                               )}
                             </div>
                             <div className="mt-1 flex items-center gap-2">
-                              <span className="text-xs text-gray-600">Saldo:</span>
-                              <span className={`text-xs font-semibold ${
-                                c.balance > 0 ? 'text-orange-600' : 'text-green-600'
-                              }`}>
+                              <span className="text-xs text-gray-600">Balance:</span>
+                              <span
+                                className={`text-xs font-semibold ${
+                                  c.balance > 0 ? 'text-orange-600' : 'text-green-600'
+                                }`}
+                              >
                                 ${c.balance.toFixed(2)}
                               </span>
                             </div>
@@ -304,7 +374,7 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
             </div>
           )}
 
-          {/* Selección de Método de Pago */}
+          {/* Método de Pago */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-3">
               Método de Pago
@@ -339,16 +409,23 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
             </div>
           </div>
 
-          {/* Monto */}
+          {/* Monto y Referencia */}
           <div className="grid grid-cols-2 gap-4">
-            <Input
-              label="Monto"
-              type="number"
-              step="0.01"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              placeholder="0.00"
-            />
+            <div>
+              <Input
+                label="Monto (USD)"
+                type="number"
+                step="0.01"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="0.00"
+              />
+              {amount && exchangeRate && (
+                <p className="text-xs text-gray-600 mt-1">
+                  ≈ {formatCurrency(parseFloat(amount) * exchangeRate.rate)} Bs
+                </p>
+              )}
+            </div>
             <Input
               label="Referencia (opcional)"
               type="text"
@@ -375,37 +452,41 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
               </h3>
               <div className="space-y-2">
                 {payments.map((payment, index) => (
-                  <div
+                  <Card
                     key={index}
-                    className={`flex items-center justify-between p-3 rounded-lg ${
-                      payment.method === 'CREDITO'
-                        ? 'bg-orange-50 border border-orange-200'
-                        : 'bg-gray-50'
-                    }`}
+                    padding="md"
+                    className={payment.method === 'CREDITO' ? 'border-l-4 border-l-purple-500' : ''}
                   >
-                    <div>
-                      <p className="font-medium text-gray-900">{payment.method}</p>
-                      {payment.reference && (
-                        <p className="text-sm text-gray-600">{payment.reference}</p>
-                      )}
-                      {payment.method === 'CREDITO' && selectedClient && (
-                        <p className="text-xs text-orange-700 mt-1">
-                          Se asignará a: <span className="font-semibold">{selectedClient.name}</span>
-                        </p>
-                      )}
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="font-medium text-gray-900">{payment.method}</p>
+                        {payment.reference && (
+                          <p className="text-sm text-gray-600">{payment.reference}</p>
+                        )}
+                        {payment.method === 'CREDITO' && selectedClient && (
+                          <p className="text-xs text-purple-700 mt-1">
+                            Cliente: {selectedClient.name}
+                          </p>
+                        )}
+                        {exchangeRate && (
+                          <p className="text-xs text-gray-600 mt-1">
+                            ≈ {formatCurrency(payment.amount_usd * exchangeRate.rate)} Bs
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="font-semibold text-gray-900">
+                          {formatCurrency(payment.amount_usd)}
+                        </span>
+                        <button
+                          onClick={() => handleRemovePayment(index)}
+                          className="text-red-600 hover:text-red-700"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-3">
-                      <span className="font-semibold text-gray-900">
-                        {formatCurrency(payment.amount_usd)}
-                      </span>
-                      <button
-                        onClick={() => handleRemovePayment(index)}
-                        className="text-red-600 hover:text-red-700"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
+                  </Card>
                 ))}
               </div>
             </div>
