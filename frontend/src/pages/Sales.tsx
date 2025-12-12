@@ -1,11 +1,25 @@
-// frontend/src/pages/SalesMovements.tsx - VENTAS Y MOVIMIENTOS
 import { useState } from 'react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
-import { Search, FileText, Eye, X as XIcon, AlertCircle, Receipt } from 'lucide-react';
+import {
+  Search,
+  FileText,
+  Eye,
+  X as XIcon,
+  AlertCircle,
+  Receipt,
+  TrendingUp,
+  TrendingDown,
+  DollarSign,
+  Users,
+  ArrowUpRight,
+  ArrowDownLeft,
+  Calendar,
+} from 'lucide-react';
 import { salesApi } from '@/api/sales';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
+import { SalePaymentModal } from '@/components/sales/SalePaymentModal';
 import { formatCurrency, formatDateTime } from '@/utils/format';
 import { Sale, SaleStatus } from '@/types';
 
@@ -13,6 +27,7 @@ export const Sales = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<SaleStatus | 'ALL'>('ALL');
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
+  const [selectedSaleForPayment, setSelectedSaleForPayment] = useState<Sale | null>(null);
 
   const queryClient = useQueryClient();
 
@@ -21,7 +36,6 @@ export const Sales = () => {
     queryFn: salesApi.getAll,
   });
 
-  // ✅ MUTACIÓN PARA ANULAR
   const annulMutation = useMutation({
     mutationFn: (id: number) => salesApi.cancel(id),
     onSuccess: () => {
@@ -54,6 +68,7 @@ export const Sales = () => {
     return matchesSearch && matchesStatus;
   });
 
+  // Calcular estadísticas
   const stats = {
     ingresos: sales
       .filter((s) => s.status !== 'ANULADO')
@@ -75,29 +90,60 @@ export const Sales = () => {
         </p>
       </div>
 
-      {/* Stats */}
+      {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card padding="md">
-          <p className="text-sm text-gray-600 mb-1">Ingresos Totales</p>
-          <p className="text-2xl font-bold text-primary-600">
-            {formatCurrency(stats.ingresos)}
-          </p>
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-sm text-gray-600 mb-1">Ingresos Totales</p>
+              <p className="text-2xl font-bold text-primary-600">
+                {formatCurrency(stats.ingresos)}
+              </p>
+            </div>
+            <div className="p-3 bg-green-100 rounded-lg">
+              <ArrowUpRight className="w-6 h-6 text-green-600" />
+            </div>
+          </div>
         </Card>
+
         <Card padding="md">
-          <p className="text-sm text-gray-600 mb-1">Cobrado</p>
-          <p className="text-2xl font-bold text-green-600">
-            {formatCurrency(stats.cobrado)}
-          </p>
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-sm text-gray-600 mb-1">Cobrado</p>
+              <p className="text-2xl font-bold text-green-600">
+                {formatCurrency(stats.cobrado)}
+              </p>
+            </div>
+            <div className="p-3 bg-blue-100 rounded-lg">
+              <DollarSign className="w-6 h-6 text-blue-600" />
+            </div>
+          </div>
         </Card>
+
         <Card padding="md">
-          <p className="text-sm text-gray-600 mb-1">Por Cobrar</p>
-          <p className="text-2xl font-bold text-orange-600">
-            {formatCurrency(stats.porCobrar)}
-          </p>
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-sm text-gray-600 mb-1">Por Cobrar</p>
+              <p className="text-2xl font-bold text-orange-600">
+                {formatCurrency(stats.porCobrar)}
+              </p>
+            </div>
+            <div className="p-3 bg-orange-100 rounded-lg">
+              <Users className="w-6 h-6 text-orange-600" />
+            </div>
+          </div>
         </Card>
+
         <Card padding="md">
-          <p className="text-sm text-gray-600 mb-1">Anuladas</p>
-          <p className="text-2xl font-bold text-red-600">{stats.anuladas}</p>
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-sm text-gray-600 mb-1">Anuladas</p>
+              <p className="text-2xl font-bold text-red-600">{stats.anuladas}</p>
+            </div>
+            <div className="p-3 bg-red-100 rounded-lg">
+              <ArrowDownLeft className="w-6 h-6 text-red-600" />
+            </div>
+          </div>
         </Card>
       </div>
 
@@ -117,7 +163,7 @@ export const Sales = () => {
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as SaleStatus | 'ALL')}
-            className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+            className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 min-w-[180px]"
           >
             <option value="ALL">Todos los estados</option>
             <option value="PAGADO">Pagado</option>
@@ -178,7 +224,7 @@ export const Sales = () => {
 
               <tbody className="divide-y divide-gray-200">
                 {filteredSales.map((sale) => (
-                  <tr key={sale.id} className="hover:bg-gray-50">
+                  <tr key={sale.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className="text-sm font-mono font-semibold text-gray-900">
                         {sale.code}
@@ -198,7 +244,7 @@ export const Sales = () => {
 
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className="text-sm text-gray-600">
-                        {formatDateTime(sale.created_at)}
+                        {formatDateTime(sale.created_at).split(',')[0]}
                       </span>
                     </td>
 
@@ -209,20 +255,22 @@ export const Sales = () => {
                     </td>
 
                     <td className="px-6 py-4 whitespace-nowrap text-right">
-                      <span className="text-sm text-green-600">
+                      <span className="text-sm font-semibold text-green-600">
                         {formatCurrency(sale.paid_usd)}
                       </span>
                     </td>
 
                     <td className="px-6 py-4 whitespace-nowrap text-right">
-                      <span className="text-sm text-orange-600">
+                      <span className={`text-sm font-semibold ${
+                        sale.balance_usd > 0 ? 'text-orange-600' : 'text-gray-400'
+                      }`}>
                         {formatCurrency(sale.balance_usd)}
                       </span>
                     </td>
 
                     <td className="px-6 py-4 whitespace-nowrap text-center">
                       <span
-                        className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
+                        className={`inline-flex px-3 py-1 text-xs font-semibold rounded-full ${
                           sale.status === 'PAGADO'
                             ? 'bg-green-100 text-green-700'
                             : sale.status === 'CREDITO'
@@ -237,16 +285,14 @@ export const Sales = () => {
                     </td>
 
                     <td className="px-6 py-4 whitespace-nowrap text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setSelectedSale(sale)}
-                        >
-                          <Eye className="w-4 h-4 mr-1" />
-                          Ver
-                        </Button>
-                      </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setSelectedSale(sale)}
+                      >
+                        <Eye className="w-4 h-4 mr-1" />
+                        Ver
+                      </Button>
                     </td>
                   </tr>
                 ))}
@@ -256,7 +302,7 @@ export const Sales = () => {
         </Card>
       )}
 
-      {/* ✅ MODAL DE DETALLE (SOLO VER Y ANULAR) */}
+      {/* ✅ MODAL DE DETALLE */}
       {selectedSale && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
@@ -272,36 +318,23 @@ export const Sales = () => {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
-                {/* ✅ SOLO ANULAR (NO PAGAR) */}
-                {selectedSale.status !== 'ANULADO' && (
-                  <button
-                    onClick={() => handleAnnul(selectedSale.id)}
-                    disabled={annulMutation.isPending}
-                    className="px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
-                  >
-                    {annulMutation.isPending ? 'Anulando...' : 'Anular Venta'}
-                  </button>
-                )}
-
-                <button
-                  onClick={() => setSelectedSale(null)}
-                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                >
-                  <XIcon className="w-6 h-6" />
-                </button>
-              </div>
+              <button
+                onClick={() => setSelectedSale(null)}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <XIcon className="w-6 h-6" />
+              </button>
             </div>
 
             {/* CONTENIDO */}
             <div className="p-6 space-y-6">
               {selectedSale.status === 'ANULADO' && (
                 <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex gap-3">
-                  <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+                  <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
                   <div>
                     <p className="font-medium text-red-900">Venta Anulada</p>
                     <p className="text-sm text-red-700 mt-1">
-                      Esta venta ha sido anulada. Stock restaurado y balances ajustados.
+                      Stock y balances han sido restaurados.
                     </p>
                   </div>
                 </div>
@@ -327,7 +360,7 @@ export const Sales = () => {
                       key={detail.id}
                       className="flex justify-between items-center p-3 bg-gray-50 rounded-lg"
                     >
-                      <div>
+                      <div className="flex-1">
                         <p className="font-medium text-gray-900">{detail.product_name}</p>
                         <p className="text-sm text-gray-600">
                           {detail.quantity} × {formatCurrency(detail.price_usd)}
@@ -340,33 +373,6 @@ export const Sales = () => {
                   ))}
                 </div>
               </div>
-
-              {/* Pagos */}
-              {selectedSale.payments.length > 0 && (
-                <div>
-                  <h3 className="text-sm font-medium text-gray-500 mb-3">
-                    Pagos Registrados
-                  </h3>
-                  <div className="space-y-2">
-                    {selectedSale.payments.map((payment, index) => (
-                      <div
-                        key={index}
-                        className="flex justify-between items-center p-3 bg-gray-50 rounded-lg"
-                      >
-                        <div>
-                          <p className="font-medium text-gray-900">{payment.method}</p>
-                          {payment.reference && (
-                            <p className="text-sm text-gray-600">{payment.reference}</p>
-                          )}
-                        </div>
-                        <p className="font-semibold text-gray-900">
-                          {formatCurrency(payment.amount_usd)}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
 
               {/* Totales */}
               <div className="border-t border-gray-200 pt-4 space-y-2">
@@ -382,7 +388,7 @@ export const Sales = () => {
                   </div>
                 )}
 
-                <div className="flex justify-between text-xl font-bold text-gray-900">
+                <div className="flex justify-between text-xl font-bold text-gray-900 py-2 border-y border-gray-200">
                   <span>Total:</span>
                   <span>{formatCurrency(selectedSale.total_usd)}</span>
                 </div>
@@ -395,7 +401,7 @@ export const Sales = () => {
                 </div>
 
                 {selectedSale.balance_usd > 0 && (
-                  <div className="flex justify-between text-orange-600 pt-2 border-t border-gray-200">
+                  <div className="flex justify-between text-orange-600">
                     <span>Por Cobrar:</span>
                     <span className="font-semibold">
                       {formatCurrency(selectedSale.balance_usd)}
@@ -403,10 +409,82 @@ export const Sales = () => {
                   </div>
                 )}
               </div>
+
+              {/* Pagos Registrados */}
+              {selectedSale.payments.length > 0 && (
+                <div>
+                  <h3 className="text-sm font-medium text-gray-500 mb-3">Pagos</h3>
+                  <div className="space-y-2">
+                    {selectedSale.payments.map((payment, idx) => (
+                      <div
+                        key={idx}
+                        className="flex justify-between items-center p-3 bg-blue-50 rounded-lg"
+                      >
+                        <div>
+                          <p className="font-medium text-gray-900">{payment.method}</p>
+                          {payment.reference && (
+                            <p className="text-sm text-gray-600">{payment.reference}</p>
+                          )}
+                        </div>
+                        <p className="font-semibold text-blue-600">
+                          {formatCurrency(payment.amount_usd)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Acciones */}
+              <div className="flex gap-3 pt-4 border-t border-gray-200">
+                {selectedSale.status !== 'ANULADO' && selectedSale.balance_usd > 0 && (
+                  <Button
+                    onClick={() => {
+                      setSelectedSale(null);
+                      setSelectedSaleForPayment(selectedSale);
+                    }}
+                    className="flex-1"
+                  >
+                    <DollarSign className="w-4 h-4 mr-2" />
+                    Abonar
+                  </Button>
+                )}
+
+                {selectedSale.status !== 'ANULADO' && (
+                  <Button
+                    onClick={() => handleAnnul(selectedSale.id)}
+                    disabled={annulMutation.isPending}
+                    variant="danger"
+                    className="flex-1"
+                  >
+                    Anular Venta
+                  </Button>
+                )}
+
+                <Button
+                  onClick={() => setSelectedSale(null)}
+                  variant="secondary"
+                  className="flex-1"
+                >
+                  Cerrar
+                </Button>
+              </div>
             </div>
           </div>
         </div>
       )}
+
+      {/* Modal de Pago */}
+      {selectedSaleForPayment && (
+        <SalePaymentModal
+          sale={selectedSaleForPayment}
+          onClose={() => setSelectedSaleForPayment(null)}
+          onSuccess={() => {
+            setSelectedSaleForPayment(null);
+            queryClient.invalidateQueries({ queryKey: ['sales'] });
+          }}
+        />
+      )}
     </div>
   );
-};
+}
