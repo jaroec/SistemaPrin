@@ -8,10 +8,10 @@ import { Login } from '@/pages/Login';
 import { Dashboard } from '@/pages/Dashboard';
 import { POS } from '@/pages/POS';
 import { Products } from '@/pages/Products';
-import { Sales } from '@/pages/Sales'; // Ahora es Ventas y Movimientos
+import { Sales } from '@/pages/Sales';
 import { Clients } from '@/pages/Clients';
 import { RegisterUser } from '@/pages/RegisterUser';
-// import { ExchangeRate } from '@/pages/ExchangeRate'; // Comentado temporalmente
+import { ExchangeRate } from '@/pages/ExchangeRate';
 import { Loader } from 'lucide-react';
 
 const queryClient = new QueryClient({
@@ -134,7 +134,7 @@ function App() {
           />
 
           {/* ✅ NUEVA: Tasa de Cambio */}
-          {/* <Route
+          <Route
             path="/exchange-rate"
             element={
               <ProtectedRoute>
@@ -143,7 +143,7 @@ function App() {
                 </Layout>
               </ProtectedRoute>
             }
-          /> */}
+          />
 
           {/* Gestión de Usuarios (Solo ADMIN) */}
           <Route
