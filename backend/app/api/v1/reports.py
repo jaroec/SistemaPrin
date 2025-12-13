@@ -1,297 +1,300 @@
 # backend/app/api/v1/reports.py
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query 
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, desc
-from typing import List, Optional
-from datetime import datetime, date, timedelta
-from app.core.security import get_db, role_required
+from sqlalchemy import func
+from datetime import datetime, date
+from typing import Optional
+import uuid
+import os
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Image
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from app.db.base import get_db
+from app.core.security import role_required
 from app.db import models
 
-router = APIRouter()
+# ======================================================================================
+# PROBLEMA SOLUCIONADO: SE QUITA EL /api/v1 (SE AGREGA EN main.py)
+# ======================================================================================
+router = APIRouter(prefix="/reports", tags=["Reports"])
+
+# ======================================================================================
+# FUNCIONES AUXILIARES COMPLETAS
+# ======================================================================================
+
+def get_financial_summary(db, start_date=None, end_date=None):
+    sale_q = db.query(models.sale.Sale).filter(models.sale.Sale.status != "ANULADO")
+    exp_q = db.query(models.expense.Expense)
+
+    if start_date:
+        start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        sale_q = sale_q.filter(func.date(models.sale.Sale.created_at) >= start)
+        exp_q = exp_q.filter(func.date(models.expense.Expense.created_at) >= start)
+
+    if end_date:
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        sale_q = sale_q.filter(func.date(models.sale.Sale.created_at) <= end)
+        exp_q = exp_q.filter(func.date(models.expense.Expense.created_at) <= end)
+
+    total_income = sale_q.with_entities(func.sum(models.sale.Sale.total_usd)).scalar() or 0
+    total_expense = exp_q.with_entities(func.sum(models.expense.Expense.amount_usd)).scalar() or 0
+
+    return {
+        "total_income_usd": float(round(total_income, 2)),
+        "total_expense_usd": float(round(total_expense, 2)),
+        "balance_usd": float(round(total_income - total_expense, 2)),
+        "count_sales": sale_q.count(),
+        "count_expenses": exp_q.count(),
+    }
 
 
-@router.get("/reports/products/top-selling")
-def top_selling_products(
-    limit: int = Query(10, le=100),
+def get_accounts_receivable(db, status="all"):
+    today = date.today()
+    q = db.query(models.accounts_receivable.AccountsReceivable)
+
+    if status == "pending":
+        q = q.filter(models.accounts_receivable.AccountsReceivable.status == "PENDIENTE")
+    elif status == "paid":
+        q = q.filter(models.accounts_receivable.AccountsReceivable.status == "PAGADO")
+    elif status == "overdue":
+        q = q.filter(
+            models.accounts_receivable.AccountsReceivable.status == "PENDIENTE",
+            models.accounts_receivable.AccountsReceivable.due_date < today
+        )
+
+    results = q.order_by(models.accounts_receivable.AccountsReceivable.due_date.asc()).all()
+
+    return [
+        {
+            "id": r.id,
+            "client_id": r.client_id,
+            "client_name": r.client.name if r.client else None,
+            "pending_amount_usd": float(r.pending_amount_usd),
+            "due_date": r.due_date.isoformat(),
+            "status": r.status,
+        }
+        for r in results
+    ]
+
+
+def get_accounts_payable(db, status="all"):
+    today = date.today()
+    q = db.query(models.accounts_payable.AccountsPayable)
+
+    if status == "pending":
+        q = q.filter(models.accounts_payable.AccountsPayable.status == "PENDIENTE")
+    elif status == "paid":
+        q = q.filter(models.accounts_payable.AccountsPayable.status == "PAGADO")
+    elif status == "overdue":
+        q = q.filter(
+            models.accounts_payable.AccountsPayable.status == "PENDIENTE",
+            models.accounts_payable.AccountsPayable.due_date < today
+        )
+
+    results = q.order_by(models.accounts_payable.AccountsPayable.due_date.asc()).all()
+
+    return [
+        {
+            "id": r.id,
+            "supplier_id": r.supplier_id,
+            "supplier_name": r.supplier.name if r.supplier else None,
+            "pending_amount_usd": float(r.pending_amount_usd),
+            "due_date": r.due_date.isoformat(),
+            "status": r.status,
+        }
+        for r in results
+    ]
+
+
+# ======================================================================================
+# ENDPOINTS BASE (JSON)
+# ======================================================================================
+
+@router.get("/summary")
+def report_summary(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     db: Session = Depends(get_db),
-    current_user=Depends(role_required("ADMIN", "CAJERO"))
 ):
-    """Productos más vendidos"""
-    query = db.query(
-        models.sale_detail.SaleDetail.product_id,
-        models.product.Product.name,
-        func.sum(models.sale_detail.SaleDetail.quantity).label('total_quantity'),
-        func.sum(models.sale_detail.SaleDetail.subtotal_usd).label('total_revenue'),
-        func.count(models.sale_detail.SaleDetail.sale_id).label('sales_count')
-    ).join(
-        models.product.Product,
-        models.sale_detail.SaleDetail.product_id == models.product.Product.id
-    ).join(
-        models.sale.Sale,
-        models.sale_detail.SaleDetail.sale_id == models.sale.Sale.id
-    ).filter(
-        models.sale.Sale.status != "ANULADO"
-    )
-    
-    if start_date:
-        start = datetime.strptime(start_date, "%Y-%m-%d").date()
-        query = query.filter(func.date(models.sale.Sale.created_at) >= start)
-    
-    if end_date:
-        end = datetime.strptime(end_date, "%Y-%m-%d").date()
-        query = query.filter(func.date(models.sale.Sale.created_at) <= end)
-    
-    results = query.group_by(
-        models.sale_detail.SaleDetail.product_id,
-        models.product.Product.name
-    ).order_by(
-        desc('total_quantity')
-    ).limit(limit).all()
-    
-    return [
-        {
-            "product_id": r.product_id,
-            "product_name": r.name,
-            "total_quantity": r.total_quantity,
-            "total_revenue_usd": round(r.total_revenue, 2),
-            "sales_count": r.sales_count
-        }
-        for r in results
+    return get_financial_summary(db, start_date, end_date)
+
+
+@router.get("/accounts_receivable")
+def report_accounts_receivable(
+    status: str = "all",
+    db: Session = Depends(get_db)
+):
+    return get_accounts_receivable(db, status)
+
+
+@router.get("/accounts_payable")
+def report_accounts_payable(
+    status: str = "all",
+    db: Session = Depends(get_db)
+):
+    return get_accounts_payable(db, status)
+
+
+# ======================================================================================
+# EXPORTACIÓN EXCEL
+# ======================================================================================
+
+@router.get("/export/excel")
+def export_excel(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    status_rcv: str = "all",
+    status_pbl: str = "all",
+    db: Session = Depends(get_db),
+    current_user=Depends(role_required("ADMIN"))
+):
+
+    file_name = f"/mnt/data/report_{uuid.uuid4()}.xlsx"
+    wb = Workbook()
+
+    summary = get_financial_summary(db, start_date, end_date)
+
+    # Sheet 1: Summary
+    ws = wb.active
+    ws.title = "Resumen"
+
+    ws.append(["Concepto", "Valor (USD)"])
+    rows = [
+        ["Ingresos", summary["total_income_usd"]],
+        ["Egresos", summary["total_expense_usd"]],
+        ["Balance", summary["balance_usd"]],
+        ["Total de Ventas", summary["count_sales"]],
+        ["Total de Gastos", summary["count_expenses"]],
     ]
 
+    for r in rows:
+        ws.append(r)
 
-@router.get("/reports/sellers/performance")
-def seller_performance(
+    header_fill = PatternFill(start_color="4F81BD", fill_type="solid")
+    for col in range(1, 3):
+        cell = ws.cell(1, col)
+        cell.fill = header_fill
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center")
+
+    ws.column_dimensions["A"].width = 30
+    ws.column_dimensions["B"].width = 20
+
+    # Sheet 2: Accounts Receivable
+    rc_list = get_accounts_receivable(db, status_rcv)
+    ws2 = wb.create_sheet("Cuentas por Cobrar")
+    ws2.append(["ID", "Cliente", "Monto Pendiente", "Vencimiento", "Estado"])
+
+    for r in rc_list:
+        ws2.append([
+            r["id"], r["client_name"], r["pending_amount_usd"], r["due_date"], r["status"]
+        ])
+
+    # Sheet 3: Accounts Payable
+    pbl_list = get_accounts_payable(db, status_pbl)
+    ws3 = wb.create_sheet("Cuentas por Pagar")
+    ws3.append(["ID", "Proveedor", "Monto Pendiente", "Vencimiento", "Estado"])
+
+    for p in pbl_list:
+        ws3.append([
+            p["id"], p["supplier_name"], p["pending_amount_usd"], p["due_date"], p["status"]
+        ])
+
+    wb.save(file_name)
+
+    return FileResponse(
+        file_name,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename="Reporte_Financiero.xlsx"
+    )
+
+
+# ======================================================================================
+# EXPORTACIÓN PDF
+# ======================================================================================
+
+@router.get("/export/pdf")
+def export_pdf(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user=Depends(role_required("ADMIN"))
 ):
-    """Rendimiento de vendedores"""
-    query = db.query(
-        models.sale.Sale.seller_id,
-        models.user.User.username,
-        func.count(models.sale.Sale.id).label('total_sales'),
-        func.sum(models.sale.Sale.total_usd).label('total_revenue'),
-        func.avg(models.sale.Sale.total_usd).label('avg_sale')
-    ).join(
-        models.user.User,
-        models.sale.Sale.seller_id == models.user.User.id
-    ).filter(
-        models.sale.Sale.status != "ANULADO"
-    )
-    
-    if start_date:
-        start = datetime.strptime(start_date, "%Y-%m-%d").date()
-        query = query.filter(func.date(models.sale.Sale.created_at) >= start)
-    
-    if end_date:
-        end = datetime.strptime(end_date, "%Y-%m-%d").date()
-        query = query.filter(func.date(models.sale.Sale.created_at) <= end)
-    
-    results = query.group_by(
-        models.sale.Sale.seller_id,
-        models.user.User.username
-    ).order_by(
-        desc('total_revenue')
-    ).all()
-    
-    return [
-        {
-            "seller_id": r.seller_id,
-            "seller_name": r.username,
-            "total_sales": r.total_sales,
-            "total_revenue_usd": round(r.total_revenue, 2),
-            "avg_sale_usd": round(r.avg_sale, 2)
-        }
-        for r in results
+    file_name = f"/mnt/data/report_{uuid.uuid4()}.pdf"
+    doc = SimpleDocTemplate(file_name, pagesize=A4)
+
+    summary = get_financial_summary(db, start_date, end_date)
+    receivable = get_accounts_receivable(db, "all")
+    payable = get_accounts_payable(db, "all")
+
+    elements = []
+    styles = getSampleStyleSheet()
+
+    logo_path = "/mnt/data/logo.png"
+    if os.path.exists(logo_path):
+        elements.append(Image(logo_path, width=120, height=60))
+
+    elements.append(Paragraph("Reporte Financiero", styles["Title"]))
+    elements.append(Paragraph(f"Período: {start_date or 'N/A'} a {end_date or 'N/A'}", styles["Normal"]))
+
+    summary_table = [
+        ["Concepto", "Valor (USD)"],
+        ["Ingresos", summary["total_income_usd"]],
+        ["Egresos", summary["total_expense_usd"]],
+        ["Balance", summary["balance_usd"]],
     ]
 
+    t = Table(summary_table)
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), colors.lightblue),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("GRID", (0,0), (-1,-1), 0.5, colors.black),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold")
+    ]))
+    elements.append(t)
 
-@router.get("/reports/daily-cash-flow")
-def daily_cash_flow(
-    days: int = Query(7, le=90),
+    elements.append(Paragraph("Cuentas por Cobrar", styles["Heading2"]))
+    data_rcv = [["ID", "Cliente", "Monto", "Vencimiento", "Estado"]]
+    data_rcv += [[r["id"], r["client_name"], r["pending_amount_usd"], r["due_date"], r["status"]] for r in receivable]
+    elements.append(Table(data_rcv))
+
+    elements.append(Paragraph("Cuentas por Pagar", styles["Heading2"]))
+    data_pbl = [["ID", "Proveedor", "Monto", "Vencimiento", "Estado"]]
+    data_pbl += [[p["id"], p["supplier_name"], p["pending_amount_usd"], p["due_date"], p["status"]] for p in payable]
+    elements.append(Table(data_pbl))
+
+    doc.build(elements)
+
+    return FileResponse(
+        file_name,
+        media_type="application/pdf",
+        filename="Reporte_Financiero.pdf"
+    )
+
+
+# ======================================================================================
+# CANCELACIÓN DE VENTA
+# ======================================================================================
+
+@router.post("/pos/sales/{sale_id}/cancel")
+def cancel_sale(
+    sale_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(role_required("ADMIN"))
 ):
-    """Flujo de caja diario por método de pago"""
-    start_date = date.today() - timedelta(days=days)
-    
-    # Subconsulta para pagos por método
-    payments_by_method = db.query(
-        func.date(models.sale.Sale.created_at).label('sale_date'),
-        models.payment.Payment.method,
-        func.sum(models.payment.Payment.amount_usd).label('amount')
-    ).join(
-        models.payment.Payment,
-        models.sale.Sale.id == models.payment.Payment.sale_id
-    ).filter(
-        func.date(models.sale.Sale.created_at) >= start_date,
-        models.sale.Sale.status != "ANULADO"
-    ).group_by(
-        'sale_date',
-        models.payment.Payment.method
-    ).all()
-    
-    # Agrupar por fecha
-    daily_data = {}
-    for row in payments_by_method:
-        date_str = row.sale_date.strftime("%Y-%m-%d")
-        if date_str not in daily_data:
-            daily_data[date_str] = {
-                "date": date_str,
-                "cash_usd": 0.0,
-                "transfer_usd": 0.0,
-                "pago_movil_usd": 0.0,
-                "divisas_usd": 0.0,
-                "total_usd": 0.0
-            }
-        
-        method = row.method.upper()
-        amount = round(row.amount, 2)
-        
-        if method == "EFECTIVO":
-            daily_data[date_str]["cash_usd"] += amount
-        elif method == "TRANSFERENCIA":
-            daily_data[date_str]["transfer_usd"] += amount
-        elif method == "PAGO_MOVIL":
-            daily_data[date_str]["pago_movil_usd"] += amount
-        elif method == "DIVISAS":
-            daily_data[date_str]["divisas_usd"] += amount
-        
-        daily_data[date_str]["total_usd"] += amount
-    
-    # Ordenar por fecha
-    return sorted(daily_data.values(), key=lambda x: x["date"], reverse=True)
+    sale = db.query(models.sale.Sale).filter(models.sale.Sale.id == sale_id).first()
 
+    if not sale:
+        return {"error": "Venta no encontrada"}
 
-@router.get("/reports/inventory-movement")
-def inventory_movement(
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user=Depends(role_required("ADMIN"))
-):
-    """Movimiento de inventario por ventas"""
-    query = db.query(
-        models.product.Product.id,
-        models.product.Product.name,
-        models.product.Product.stock.label('current_stock'),
-        func.sum(models.sale_detail.SaleDetail.quantity).label('sold_quantity')
-    ).join(
-        models.sale_detail.SaleDetail,
-        models.product.Product.id == models.sale_detail.SaleDetail.product_id
-    ).join(
-        models.sale.Sale,
-        models.sale_detail.SaleDetail.sale_id == models.sale.Sale.id
-    ).filter(
-        models.sale.Sale.status != "ANULADO"
-    )
-    
-    if start_date:
-        start = datetime.strptime(start_date, "%Y-%m-%d").date()
-        query = query.filter(func.date(models.sale.Sale.created_at) >= start)
-    
-    if end_date:
-        end = datetime.strptime(end_date, "%Y-%m-%d").date()
-        query = query.filter(func.date(models.sale.Sale.created_at) <= end)
-    
-    results = query.group_by(
-        models.product.Product.id,
-        models.product.Product.name,
-        models.product.Product.stock
-    ).order_by(
-        desc('sold_quantity')
-    ).all()
-    
-    return [
-        {
-            "product_id": r.id,
-            "product_name": r.name,
-            "current_stock": r.current_stock,
-            "sold_quantity": r.sold_quantity,
-            "status": "LOW_STOCK" if r.current_stock < 10 else "OK"
-        }
-        for r in results
-    ]
+    if sale.status == "ANULADO":
+        return {"message": "La venta ya está anulada"}
 
+    sale.status = "ANULADO"
+    db.commit()
 
-@router.get("/reports/client-purchases")
-def client_purchases(
-    client_id: Optional[int] = None,
-    limit: int = Query(20, le=100),
-    db: Session = Depends(get_db),
-    current_user=Depends(role_required("ADMIN", "CAJERO"))
-):
-    """Historial de compras por cliente"""
-    query = db.query(
-        models.client.Client.id,
-        models.client.Client.name,
-        func.count(models.sale.Sale.id).label('total_purchases'),
-        func.sum(models.sale.Sale.total_usd).label('total_spent'),
-        func.sum(models.sale.Sale.balance_usd).label('total_pending'),
-        func.max(models.sale.Sale.created_at).label('last_purchase')
-    ).join(
-        models.sale.Sale,
-        models.client.Client.id == models.sale.Sale.client_id
-    ).filter(
-        models.sale.Sale.status != "ANULADO"
-    )
-    
-    if client_id:
-        query = query.filter(models.client.Client.id == client_id)
-    
-    results = query.group_by(
-        models.client.Client.id,
-        models.client.Client.name
-    ).order_by(
-        desc('total_spent')
-    ).limit(limit).all()
-    
-    return [
-        {
-            "client_id": r.id,
-            "client_name": r.name,
-            "total_purchases": r.total_purchases,
-            "total_spent_usd": round(r.total_spent, 2),
-            "total_pending_usd": round(r.total_pending, 2),
-            "last_purchase": r.last_purchase.isoformat()
-        }
-        for r in results
-    ]
-
-
-@router.get("/reports/sales-by-hour")
-def sales_by_hour(
-    date_filter: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user=Depends(role_required("ADMIN"))
-):
-    """Ventas por hora del día"""
-    query = db.query(
-        func.extract('hour', models.sale.Sale.created_at).label('hour'),
-        func.count(models.sale.Sale.id).label('sales_count'),
-        func.sum(models.sale.Sale.total_usd).label('total_revenue')
-    ).filter(
-        models.sale.Sale.status != "ANULADO"
-    )
-    
-    if date_filter:
-        target_date = datetime.strptime(date_filter, "%Y-%m-%d").date()
-        query = query.filter(func.date(models.sale.Sale.created_at) == target_date)
-    else:
-        # Por defecto, hoy
-        query = query.filter(func.date(models.sale.Sale.created_at) == date.today())
-    
-    results = query.group_by('hour').order_by('hour').all()
-    
-    return [
-        {
-            "hour": int(r.hour),
-            "sales_count": r.sales_count,
-            "total_revenue_usd": round(r.total_revenue, 2)
-        }
-        for r in results
-    ]
+    return {"message": "Venta anulada correctamente", "sale_id": sale_id}
