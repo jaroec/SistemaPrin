@@ -1,4 +1,4 @@
-# backend/app/api/v1/pos.py - VERSIÓN MEJORADA CON VALIDACIÓN DE CRÉDITO
+# backend/app/api/v1/pos.py
 from fastapi import APIRouter, Depends, HTTPException, status, Body
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -26,6 +26,24 @@ def generate_sale_code(db: Session):
     return f"VENTA-{today}-{count+1:03d}"
 
 
+def summarize_payment_method(payments: List[PaymentCreate]) -> str:
+    """
+    Devuelve un string que resume el método de pago de la venta:
+    - "CREDITO" si existe al menos un pago tipo CREDITO
+    - nombre del método si solo hay un método no crédito
+    - "MIXTO" si hay múltiples métodos no-credito
+    """
+    if not payments:
+        return "N/A"
+    methods = [p.method.value.upper() for p in payments]
+    if any(m == "CREDITO" for m in methods):
+        return "CREDITO"
+    unique = set(methods)
+    if len(unique) == 1:
+        return unique.pop()
+    return "MIXTO"
+
+
 @router.post("/sales", response_model=SaleOut, status_code=status.HTTP_201_CREATED)
 def create_sale(
     payload: SaleCreate,
@@ -33,18 +51,23 @@ def create_sale(
     current_user=Depends(role_required("CAJERO", "ADMIN"))
 ):
     """
-    ✅ NUEVA LÓGICA DE CRÉDITO CON VALIDACIÓN:
-    - Valida límite de crédito ANTES de crear venta
-    - Si TODO es CRÉDITO → Estado CREDITO (no PAGADO)
-    - Si hay pago mixto (CRÉDITO + otros) → Estado CREDITO
-    - Si NO hay CRÉDITO y está pagado completo → Estado PAGADO
-    - Asigna deuda al cliente SOLO para la parte en CRÉDITO
+    Crear venta con manejo correcto de CRÉDITO y pagos mixtos.
+
+    Reglas principales:
+    - Los pagos con method == CREDITO generan deuda (se registran como payment record
+      pero NO cuentan como dinero pagado para paid_usd).
+    - paid_usd suma solo los pagos reales (EFECTIVO / TRANSFERENCIA / PAGO_MOVIL / etc).
+    - balance_usd = total_usd - paid_usd
+    - Si existe crédito (credit_amount > 0):
+        - Si paid_usd == 0  => estado = PENDIENTE (100% crédito)
+        - Si paid_usd > 0   => estado = CREDITO (mixto)
+      Además payment_method resumen se marca como "CREDITO".
+    - Si no existe crédito:
+        - Si balance_usd == 0 => PAGADO
+        - else => PENDIENTE
     """
     try:
-        print(f"\n🚀 INICIANDO CREACIÓN DE VENTA")
-        print(f"   Payload recibido: {payload}")
-        
-        # 1️⃣ Gestionar cliente (OBLIGATORIO si hay CRÉDITO)
+        # 1. Cliente (si aplica)
         client = None
         if payload.client_id:
             client = db.query(models.client.Client).filter(
@@ -52,12 +75,10 @@ def create_sale(
             ).first()
             if not client:
                 raise HTTPException(status_code=404, detail="Cliente no encontrado")
-            print(f"   ✅ Cliente: {client.name} (Balance actual: ${client.balance})")
 
-        # 2️⃣ Validar productos y calcular totales
+        # 2. Validar productos y calcular subtotal
         subtotal = 0.0
         details_data = []
-
         for item in payload.items:
             product = db.query(models.product.Product).filter(
                 models.product.Product.id == item.product_id,
@@ -84,39 +105,42 @@ def create_sale(
                 'subtotal_usd': item_subtotal
             })
 
-        # 3️⃣ Calcular totales
+        # 3. Totales
         discount = getattr(payload, "discount_usd", 0.0) or 0.0
         total = round(subtotal - discount, 2)
 
-        # 4️⃣ ✅ DETECTAR CRÉDITO Y VALIDAR LÍMITE
+        # 4. Detectar crédito y validar límite (credit_amount = suma de payments method CREDITO)
         has_credit = False
         credit_amount = 0.0
-        
-        if payload.payments:
-            for payment_data in payload.payments:
-                if payment_data.method == PaymentMethodEnum.CREDITO:
-                    has_credit = True
-                    credit_amount += payment_data.amount_usd
+        non_credit_sum = 0.0
 
-        # ✅ VALIDAR CRÉDITO
+        if payload.payments:
+            for p in payload.payments:
+                if p.method == PaymentMethodEnum.CREDITO:
+                    has_credit = True
+                    credit_amount += round(p.amount_usd, 2)
+                else:
+                    non_credit_sum += round(p.amount_usd, 2)
+
+        # Validación: la suma de pagos reales no puede exceder el total
+        if non_credit_sum > total:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Los pagos no-crédito ({non_credit_sum}) exceden el total ({total})"
+            )
+
+        # Si hay crédito, requerir cliente y validar límite disponible
         if has_credit:
-            # Crédito requiere cliente
             if not client:
-                raise HTTPException(
-                    status_code=400,
-                    detail="⚠️ Cliente requerido para ventas con CRÉDITO"
-                )
-            
-            # Validar límite de crédito disponible
-            available_credit = client.credit_limit - client.balance
+                raise HTTPException(status_code=400, detail="Cliente requerido para ventas con CRÉDITO")
+            available_credit = (client.credit_limit or 0.0) - (client.balance or 0.0)
             if credit_amount > available_credit:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"⚠️ Crédito insuficiente. Disponible: ${available_credit:.2f}, Solicitado: ${credit_amount:.2f}"
+                    detail=f"Crédito insuficiente. Disponible: ${available_credit:.2f}, Solicitado: ${credit_amount:.2f}"
                 )
-            print(f"   ✅ Validación crédito OK: ${credit_amount:.2f} ≤ ${available_credit:.2f}")
 
-        # 5️⃣ Crear venta (pendiente inicialmente)
+        # 5. Crear venta (inicialmente con paid_usd=0, balance=total)
         sale = models.sale.Sale(
             code=generate_sale_code(db),
             client_id=client.id if client else None,
@@ -126,38 +150,34 @@ def create_sale(
             total_usd=total,
             paid_usd=0.0,
             balance_usd=total,
-            payment_method=payload.payment_method,
+            # provisional; se reasignará correctamente después
+            payment_method=summarize_payment_method(payload.payments) if payload.payments else "N/A",
             status="PENDIENTE"
         )
         db.add(sale)
         db.flush()
 
-        # 6️⃣ Crear detalles y actualizar stock
-        for detail_data in details_data:
+        # 6. Detalles y stock
+        for d in details_data:
             detail = models.sale_detail.SaleDetail(
                 sale_id=sale.id,
-                product_id=detail_data['product'].id,
-                quantity=detail_data['quantity'],
-                price_usd=detail_data['price_usd'],
-                subtotal_usd=detail_data['subtotal_usd']
+                product_id=d['product'].id,
+                quantity=d['quantity'],
+                price_usd=d['price_usd'],
+                subtotal_usd=d['subtotal_usd']
             )
             db.add(detail)
-            detail_data['product'].stock -= detail_data['quantity']
+            # actualizar stock en memoria
+            d['product'].stock -= d['quantity']
 
-        # 7️⃣ Registrar pagos y calcular totales
+        # 7. Registrar payments: crear registro para todos, pero solo sumar a paid_usd los no-credito
         total_paid = 0.0
-
+        recorded_credit = 0.0  # crédito registrado (no contado en paid_usd)
         if payload.payments:
             for payment_data in payload.payments:
                 amount = round(payment_data.amount_usd, 2)
-                method = payment_data.method.value
-                
-                if total_paid + amount > total:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"El monto de pago ({total_paid + amount}) excede el total ({total})"
-                    )
-                
+                method = payment_data.method.value.upper()
+
                 payment = models.payment.Payment(
                     sale_id=sale.id,
                     method=method,
@@ -165,53 +185,61 @@ def create_sale(
                     reference=payment_data.reference
                 )
                 db.add(payment)
-                total_paid += amount
 
-        # 8️⃣ ✅ NUEVA LÓGICA DE ESTADO - CORREGIDA
+                if method == "CREDITO":
+                    recorded_credit += amount
+                else:
+                    # chequeo de excedente adicional por seguridad
+                    if total_paid + amount > total:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"El monto de pagos ({total_paid + amount}) excede el total ({total})"
+                        )
+                    total_paid += amount
+
+        # 8. Actualizar montos y estado
         sale.paid_usd = round(total_paid, 2)
         sale.balance_usd = round(max(total - sale.paid_usd, 0.0), 2)
 
-        if has_credit:
-            # ✅ IMPORTANTE: Si hay crédito, SIEMPRE es CREDITO o PENDIENTE
-            if credit_amount == total and total_paid == 0:
-                # 100% crédito, sin otros pagos → PENDIENTE
-                sale.status = "PENDIENTE"
-                print(f"      Estado: PENDIENTE (100% crédito, nada pagado)")
+        # Determinar estado y payment_method summary
+        if recorded_credit > 0:
+            # existe crédito implicado
+            if sale.paid_usd == 0:
+                sale.status = "CREDITO"   # 100% crédito
             else:
-                # Hay crédito + otros pagos (mixto) → CREDITO
-                sale.status = "CREDITO"
-                print(f"      Estado: CREDITO (pago mixto)")
+                sale.status = "CREDITO"     # mixto
+            sale.payment_method = "CREDITO"
         else:
-            # No hay crédito
+            # no hay crédito
             if sale.balance_usd == 0:
                 sale.status = "PAGADO"
-                print(f"      Estado: PAGADO (sin crédito, pagado completo)")
             else:
                 sale.status = "PENDIENTE"
-                print(f"      Estado: PENDIENTE (sin crédito, pago parcial)")
+            # Si hay pagos no-credito, resumir método
+            if payload.payments:
+                # obtiene resumen entre métodos reales (no crédito)
+                non_credit_methods = [p.method.value.upper() for p in payload.payments if p.method != PaymentMethodEnum.CREDITO]
+                if len(non_credit_methods) == 0:
+                    sale.payment_method = "N/A"
+                else:
+                    unique = set(non_credit_methods)
+                    if len(unique) == 1:
+                        sale.payment_method = unique.pop()
+                    else:
+                        sale.payment_method = "MIXTO"
+            else:
+                sale.payment_method = payload.payment_method or "N/A"
 
-        # 9️⃣ ✅ Actualizar balance del cliente Y REDUCIR LÍMITE DISPONIBLE
-        if client and credit_amount > 0:
-            # Agregar la deuda
-            client.balance = round((client.balance or 0.0) + credit_amount, 2)
-            # ✅ NUEVO: También reducir el límite disponible
-            # (El límite disponible = credit_limit - balance)
-            # Esto se calcula automáticamente cuando se consulta
-            print(f"   👤 Balance del cliente actualizado: ${client.balance:.2f}")
-            print(f"   👤 Límite disponible ahora: ${client.credit_limit - client.balance:.2f}")
+        # 9. Actualizar balance del cliente (sumar deuda por la parte crédito)
+        if client and recorded_credit > 0:
+            client.balance = round((client.balance or 0.0) + recorded_credit, 2)
 
+        # Aplicar cambios en stock y commit
         db.commit()
+        # refrescar para tener relacion payments/details actualizadas
         db.refresh(sale)
 
-        print(f"\n✅ VENTA COMPLETADA:")
-        print(f"   Código: {sale.code}")
-        print(f"   Total: ${total:.2f}")
-        print(f"   Pagado: ${sale.paid_usd:.2f}")
-        print(f"   Crédito: ${credit_amount:.2f}")
-        print(f"   Balance Pendiente: ${sale.balance_usd:.2f}")
-        print(f"   Estado: {sale.status}\n")
-
-        # Construir salida
+        # Preparar salida
         details_out = [
             SaleDetailOut(
                 id=d.id,
@@ -257,9 +285,6 @@ def create_sale(
         raise
     except Exception as e:
         db.rollback()
-        print(f"\n❌ ERROR: {str(e)}")
-        import traceback
-        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error al crear venta: {str(e)}")
 
 
@@ -272,7 +297,7 @@ def get_sale(
     sale = db.query(models.sale.Sale).filter(
         models.sale.Sale.id == sale_id
     ).first()
-    
+
     if not sale:
         raise HTTPException(status_code=404, detail="Venta no encontrada")
 
@@ -286,6 +311,17 @@ def get_sale(
             subtotal_usd=d.subtotal_usd
         )
         for d in sale.details
+    ]
+
+    payments_out = [
+        PaymentOut(
+            id=p.id,
+            method=p.method,
+            amount_usd=p.amount_usd,
+            reference=p.reference,
+            created_at=p.created_at
+        )
+        for p in sale.payments
     ]
 
     return SaleOut(
@@ -302,7 +338,7 @@ def get_sale(
         payment_method=sale.payment_method,
         status=sale.status,
         details=details_out,
-        payments=sale.payments,
+        payments=payments_out,
         created_at=sale.created_at
     )
 
@@ -316,10 +352,10 @@ def list_sales(
     current_user=Depends(role_required("CAJERO", "ADMIN"))
 ):
     query = db.query(models.sale.Sale)
-    
+
     if status:
         query = query.filter(models.sale.Sale.status == status.upper())
-    
+
     sales = query.order_by(
         models.sale.Sale.created_at.desc()
     ).offset(skip).limit(limit).all()
@@ -337,7 +373,18 @@ def list_sales(
             )
             for d in sale.details
         ]
-        
+
+        payments_out = [
+            PaymentOut(
+                id=p.id,
+                method=p.method,
+                amount_usd=p.amount_usd,
+                reference=p.reference,
+                created_at=p.created_at
+            )
+            for p in sale.payments
+        ]
+
         results.append(SaleOut(
             id=sale.id,
             code=sale.code,
@@ -352,10 +399,10 @@ def list_sales(
             payment_method=sale.payment_method,
             status=sale.status,
             details=details_out,
-            payments=sale.payments,
+            payments=payments_out,
             created_at=sale.created_at
         ))
-    
+
     return results
 
 
@@ -366,7 +413,7 @@ def annul_sale(
     current_user=Depends(role_required("ADMIN"))
 ):
     """
-    ✅ ANULAR venta: Restaura stock y ajusta balance del cliente
+    Anular venta: restaura stock y ajusta balance del cliente (solo la porción de crédito)
     """
     sale = db.query(models.sale.Sale).filter(models.sale.Sale.id == sale_id).first()
     if not sale:
@@ -383,21 +430,19 @@ def annul_sale(
         if product:
             product.stock += detail.quantity
 
-    # ✅ Ajustar balance del cliente (restar lo que se había agregado)
-    if sale.client_id and sale.paid_usd > 0:
+    # Ajustar balance del cliente: restar solo la porción de crédito registrada
+    if sale.client_id:
         client = db.query(models.client.Client).filter(
             models.client.Client.id == sale.client_id
         ).first()
         if client:
-            # Calcular cuánto era crédito
-            credit_payments = [p for p in sale.payments if p.method == "CREDITO"]
+            # Sumar todos los payments con method == "CREDITO"
+            credit_payments = [p for p in sale.payments if p.method.upper() == "CREDITO"]
             credit_total = sum(p.amount_usd for p in credit_payments)
-            
-            # Restar solo el crédito del balance
             if credit_total > 0:
-                client.balance = round(max(0, client.balance - credit_total), 2)
+                client.balance = round(max(0, (client.balance or 0.0) - credit_total), 2)
 
-    # Poner venta en estado ANULADO
+    # Marcar anulada
     sale.status = "ANULADO"
     sale.balance_usd = 0.0
 
@@ -418,24 +463,27 @@ def pay_sale(
     current_user=Depends(role_required("CAJERO", "ADMIN"))
 ):
     """
-    ✅ Abonar a venta pendiente
+    Registrar abonos a una venta pendiente.
+    - No se permiten payments con method == CREDITO en este endpoint (uso: pagos reales).
+    - Los pagos reducen paid_usd y balance_usd. Si la venta tiene cliente, también reducen client.balance.
     """
-    sale = db.query(models.sale.Sale).filter(
-        models.sale.Sale.id == sale_id
-    ).first()
-    
+    sale = db.query(models.sale.Sale).filter(models.sale.Sale.id == sale_id).first()
+
     if not sale:
         raise HTTPException(status_code=404, detail="Venta no encontrada")
-    
+
     if sale.status == "ANULADO":
         raise HTTPException(status_code=400, detail="No se puede pagar una venta anulada")
 
     if sale.status == "PAGADO":
         raise HTTPException(status_code=400, detail="Esta venta ya está completamente pagada")
 
-    # Validar monto
+    # Validar que no se envíe CREDITO en este endpoint
+    for p in payments:
+        if p.method == PaymentMethodEnum.CREDITO:
+            raise HTTPException(status_code=400, detail="No se acepta CREDITO en el endpoint de abonos")
+
     total_new_payments = sum(round(p.amount_usd, 2) for p in payments)
-    
     if total_new_payments > sale.balance_usd:
         raise HTTPException(
             status_code=400,
@@ -446,9 +494,10 @@ def pay_sale(
     total_paid = sale.paid_usd
     for payment_data in payments:
         amount = round(payment_data.amount_usd, 2)
+        method = payment_data.method.value.upper()
         payment = models.payment.Payment(
             sale_id=sale.id,
-            method=payment_data.method.value,
+            method=method,
             amount_usd=amount,
             reference=payment_data.reference
         )
@@ -458,22 +507,22 @@ def pay_sale(
     sale.paid_usd = round(total_paid, 2)
     sale.balance_usd = round(max(sale.total_usd - sale.paid_usd, 0.0), 2)
 
-    # Actualizar estado
+    # Actualizar estado: si queda balance -> CREDITO si originalmente había crédito, sino PENDIENTE
     if sale.balance_usd == 0:
         sale.status = "PAGADO"
-    elif sale.paid_usd > 0:
-        sale.status = "CREDITO"
+    else:
+        # Si la venta contiene al menos un payment de tipo CREDITO en registro -> CREDITO
+        has_credit_record = any(p.method.upper() == "CREDITO" for p in sale.payments)
+        sale.status = "CREDITO" if has_credit_record else "PENDIENTE"
 
-    # ✅ Actualizar balance del cliente (restar abono)
+    # Reducir balance del cliente (si existe)
     if sale.client_id:
-        client = db.query(models.client.Client).filter(
-            models.client.Client.id == sale.client_id
-        ).first()
+        client = db.query(models.client.Client).filter(models.client.Client.id == sale.client_id).first()
         if client:
-            client.balance = round(max(0, client.balance - total_new_payments), 2)
+            client.balance = round(max(0, (client.balance or 0.0) - total_new_payments), 2)
 
     db.commit()
-    
+
     return {
         "detail": "Pago registrado correctamente",
         "sale_id": sale_id,
@@ -489,5 +538,5 @@ def cancel_sale(
     db: Session = Depends(get_db),
     current_user=Depends(role_required("ADMIN"))
 ):
-    """Alias de annul_sale"""
+    """Alias a annul_sale"""
     return annul_sale(sale_id, db, current_user)
