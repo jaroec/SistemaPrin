@@ -1,296 +1,289 @@
-# backend/app/api/v1/reports.py
-from fastapi import APIRouter, Depends, HTTPException, Query
+# backend/app/api/v1/products.py
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, desc
-from typing import List, Optional
-from datetime import datetime, date, timedelta
-from app.core.security import get_db, role_required
+from typing import List
 from app.db import models
+from app.db.schemas.products import ProductCreate, ProductOut, ProductUpdate
+from app.core.security import get_db, role_required
 
 router = APIRouter()
 
-@router.get("/reports/products/top-selling")
-def top_selling_products(
-    limit: int = Query(10, le=100),
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
+
+# 🟢 Crear producto
+@router.post(
+    "/",
+    response_model=ProductOut,
+    summary="Crear nuevo producto",
+    status_code=status.HTTP_201_CREATED,
+    description="Crea un producto nuevo y calcula automáticamente el precio de venta con base en el costo y margen de ganancia."
+)
+def create_product(
+    payload: ProductCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(role_required("ADMIN", "CAJERO"))
+    current_user=Depends(role_required("ADMIN", "INVENTARIO"))
 ):
-    """Productos más vendidos"""
-    query = db.query(
-        models.sale_detail.SaleDetail.product_id,
-        models.product.Product.name,
-        func.sum(models.sale_detail.SaleDetail.quantity).label('total_quantity'),
-        func.sum(models.sale_detail.SaleDetail.subtotal_usd).label('total_revenue'),
-        func.count(models.sale_detail.SaleDetail.sale_id).label('sales_count')
-    ).join(
-        models.product.Product,
-        models.sale_detail.SaleDetail.product_id == models.product.Product.id
-    ).join(
-        models.sale.Sale,
-        models.sale_detail.SaleDetail.sale_id == models.sale.Sale.id
-    ).filter(
-        models.sale.Sale.status != "ANULADO"
+    """
+    Crea un nuevo producto validando que el código no exista
+    y calculando el `sale_price` automáticamente con la fórmula contable:
+    sale_price = cost_price / (1 - (profit_margin / 100))
+    """
+
+    existing = db.query(models.product.Product).filter(
+        models.product.Product.code == payload.code
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="El código de producto ya existe")
+
+    if payload.profit_margin >= 100:
+        raise HTTPException(
+            status_code=400,
+            detail="El porcentaje de ganancia no puede ser igual o superior al 100%",
+        )
+
+    try:
+        sale_price = payload.cost_price / (1 - (payload.profit_margin / 100))
+    except ZeroDivisionError:
+        raise HTTPException(
+            status_code=400, detail="El margen de ganancia no puede ser 100% o mayor."
+        )
+
+    product = models.product.Product(
+        code=payload.code,
+        name=payload.name,
+        description=payload.description,
+        category=payload.category,
+        supplier=payload.supplier,
+        cost_price=round(payload.cost_price, 2),
+        sale_price=round(sale_price, 2),
+        profit_margin=round(payload.profit_margin, 2),
+        stock=payload.stock or 0,
+        min_stock=payload.min_stock or 5,
+        is_active=True,
     )
-    
-    if start_date:
-        start = datetime.strptime(start_date, "%Y-%m-%d").date()
-        query = query.filter(func.date(models.sale.Sale.created_at) >= start)
-    
-    if end_date:
-        end = datetime.strptime(end_date, "%Y-%m-%d").date()
-        query = query.filter(func.date(models.sale.Sale.created_at) <= end)
-    
-    results = query.group_by(
-        models.sale_detail.SaleDetail.product_id,
-        models.product.Product.name
-    ).order_by(
-        desc('total_quantity')
-    ).limit(limit).all()
-    
-    return [
-        {
-            "product_id": r.product_id,
-            "product_name": r.name,
-            "total_quantity": r.total_quantity,
-            "total_revenue_usd": round(r.total_revenue, 2),
-            "sales_count": r.sales_count
-        }
-        for r in results
-    ]
+
+    db.add(product)
+    db.commit()
+    db.refresh(product)
+
+    # Calcular margen real de ganancia (en %)
+    margin_real = round((1 - (product.cost_price / product.sale_price)) * 100, 2)
+    product.profit_margin = margin_real
+
+    return product
 
 
-@router.get("/reports/sellers/performance")
-def seller_performance(
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
+# 📋 Listar productos activos
+@router.get(
+    "/",
+    response_model=List[ProductOut],
+    summary="Listar productos activos",
+    description="Devuelve todos los productos activos del inventario. Se puede incluir inactivos con `active_only=false`."
+)
+def list_products(
     db: Session = Depends(get_db),
-    current_user=Depends(role_required("ADMIN"))
+    current_user=Depends(role_required("ADMIN", "CAJERO", "INVENTARIO")),
+    active_only: bool = Query(True, description="Filtrar solo productos activos"),
 ):
-    """Rendimiento de vendedores"""
-    query = db.query(
-        models.sale.Sale.seller_id,
-        models.user.User.username,
-        func.count(models.sale.Sale.id).label('total_sales'),
-        func.sum(models.sale.Sale.total_usd).label('total_revenue'),
-        func.avg(models.sale.Sale.total_usd).label('avg_sale')
-    ).join(
-        models.user.User,
-        models.sale.Sale.seller_id == models.user.User.id
-    ).filter(
-        models.sale.Sale.status != "ANULADO"
+    query = db.query(models.product.Product)
+    if active_only:
+        query = query.filter(models.product.Product.is_active == True)
+
+    products = query.order_by(models.product.Product.id.desc()).all()
+
+    # Recalcular margen real para cada producto antes de devolverlo
+    for p in products:
+        if p.sale_price and p.cost_price:
+            p.profit_margin = round((1 - (p.cost_price / p.sale_price)) * 100, 2)
+    return products
+
+
+# 🔎 Obtener producto por ID
+@router.get(
+    "/{product_id}",
+    response_model=ProductOut,
+    summary="Obtener un producto por ID",
+    description="Busca y devuelve un producto existente mediante su ID único."
+)
+def get_product(
+    product_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(role_required("ADMIN", "CAJERO", "INVENTARIO")),
+):
+    product = (
+        db.query(models.product.Product)
+        .filter(models.product.Product.id == product_id)
+        .first()
     )
-    
-    if start_date:
-        start = datetime.strptime(start_date, "%Y-%m-%d").date()
-        query = query.filter(func.date(models.sale.Sale.created_at) >= start)
-    
-    if end_date:
-        end = datetime.strptime(end_date, "%Y-%m-%d").date()
-        query = query.filter(func.date(models.sale.Sale.created_at) <= end)
-    
-    results = query.group_by(
-        models.sale.Sale.seller_id,
-        models.user.User.username
-    ).order_by(
-        desc('total_revenue')
-    ).all()
-    
-    return [
-        {
-            "seller_id": r.seller_id,
-            "seller_name": r.username,
-            "total_sales": r.total_sales,
-            "total_revenue_usd": round(r.total_revenue, 2),
-            "avg_sale_usd": round(r.avg_sale, 2)
-        }
-        for r in results
-    ]
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+    # Calcular margen real
+    if product.sale_price and product.cost_price:
+        product.profit_margin = round((1 - (product.cost_price / product.sale_price)) * 100, 2)
+    return product
 
 
-@router.get("/reports/daily-cash-flow")
-def daily_cash_flow(
-    days: int = Query(7, le=90),
+# ✏️ Actualizar producto
+@router.put(
+    "/{product_id}",
+    response_model=ProductOut,
+    summary="Actualizar producto existente",
+    description="Permite modificar información del producto. Si se cambia el costo o margen, recalcula automáticamente el precio de venta."
+)
+def update_product(
+    product_id: int,
+    payload: ProductUpdate,
     db: Session = Depends(get_db),
-    current_user=Depends(role_required("ADMIN"))
+    current_user=Depends(role_required("ADMIN", "INVENTARIO")),
 ):
-    """Flujo de caja diario por método de pago"""
-    start_date = date.today() - timedelta(days=days)
-    
-    # Subconsulta para pagos por método
-    payments_by_method = db.query(
-        func.date(models.sale.Sale.created_at).label('sale_date'),
-        models.payment.Payment.method,
-        func.sum(models.payment.Payment.amount_usd).label('amount')
-    ).join(
-        models.payment.Payment,
-        models.sale.Sale.id == models.payment.Payment.sale_id
-    ).filter(
-        func.date(models.sale.Sale.created_at) >= start_date,
-        models.sale.Sale.status != "ANULADO"
-    ).group_by(
-        'sale_date',
-        models.payment.Payment.method
-    ).all()
-    
-    # Agrupar por fecha
-    daily_data = {}
-    for row in payments_by_method:
-        date_str = row.sale_date.strftime("%Y-%m-%d")
-        if date_str not in daily_data:
-            daily_data[date_str] = {
-                "date": date_str,
-                "cash_usd": 0.0,
-                "transfer_usd": 0.0,
-                "pago_movil_usd": 0.0,
-                "divisas_usd": 0.0,
-                "total_usd": 0.0
-            }
-        
-        method = row.method.upper()
-        amount = round(row.amount, 2)
-        
-        if method == "EFECTIVO":
-            daily_data[date_str]["cash_usd"] += amount
-        elif method == "TRANSFERENCIA":
-            daily_data[date_str]["transfer_usd"] += amount
-        elif method == "PAGO_MOVIL":
-            daily_data[date_str]["pago_movil_usd"] += amount
-        elif method == "DIVISAS":
-            daily_data[date_str]["divisas_usd"] += amount
-        
-        daily_data[date_str]["total_usd"] += amount
-    
-    # Ordenar por fecha
-    return sorted(daily_data.values(), key=lambda x: x["date"], reverse=True)
-
-
-@router.get("/reports/inventory-movement")
-def inventory_movement(
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user=Depends(role_required("ADMIN"))
-):
-    """Movimiento de inventario por ventas"""
-    query = db.query(
-        models.product.Product.id,
-        models.product.Product.name,
-        models.product.Product.stock.label('current_stock'),
-        func.sum(models.sale_detail.SaleDetail.quantity).label('sold_quantity')
-    ).join(
-        models.sale_detail.SaleDetail,
-        models.product.Product.id == models.sale_detail.SaleDetail.product_id
-    ).join(
-        models.sale.Sale,
-        models.sale_detail.SaleDetail.sale_id == models.sale.Sale.id
-    ).filter(
-        models.sale.Sale.status != "ANULADO"
+    product = (
+        db.query(models.product.Product)
+        .filter(models.product.Product.id == product_id)
+        .first()
     )
-    
-    if start_date:
-        start = datetime.strptime(start_date, "%Y-%m-%d").date()
-        query = query.filter(func.date(models.sale.Sale.created_at) >= start)
-    
-    if end_date:
-        end = datetime.strptime(end_date, "%Y-%m-%d").date()
-        query = query.filter(func.date(models.sale.Sale.created_at) <= end)
-    
-    results = query.group_by(
-        models.product.Product.id,
-        models.product.Product.name,
-        models.product.Product.stock
-    ).order_by(
-        desc('sold_quantity')
-    ).all()
-    
-    return [
-        {
-            "product_id": r.id,
-            "product_name": r.name,
-            "current_stock": r.current_stock,
-            "sold_quantity": r.sold_quantity,
-            "status": "LOW_STOCK" if r.current_stock < 10 else "OK"
-        }
-        for r in results
-    ]
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+    update_data = payload.dict(exclude_unset=True)
+
+    for key, value in update_data.items():
+        setattr(product, key, value)
+
+    if "cost_price" in update_data or "profit_margin" in update_data:
+        cost = update_data.get("cost_price", product.cost_price)
+        margin = update_data.get("profit_margin", product.profit_margin)
+
+        if margin >= 100:
+            raise HTTPException(
+                status_code=400,
+                detail="El porcentaje de ganancia no puede ser igual o superior al 100%",
+            )
+
+        try:
+            product.sale_price = round(cost / (1 - (margin / 100)), 2)
+        except ZeroDivisionError:
+            raise HTTPException(
+                status_code=400, detail="El margen de ganancia no puede ser 100% o mayor."
+            )
+
+    db.commit()
+    db.refresh(product)
+
+    # Recalcular margen real actualizado
+    if product.sale_price and product.cost_price:
+        product.profit_margin = round((1 - (product.cost_price / product.sale_price)) * 100, 2)
+
+    return product
 
 
-@router.get("/reports/client-purchases")
-def client_purchases(
-    client_id: Optional[int] = None,
-    limit: int = Query(20, le=100),
+# ⚠️ Productos con bajo stock
+@router.get(
+    "/alerts/low-stock",
+    response_model=List[ProductOut],
+    summary="Listar productos con bajo stock",
+    description="Devuelve los productos cuyo stock actual es menor o igual al mínimo establecido."
+)
+def low_stock_alert(
     db: Session = Depends(get_db),
-    current_user=Depends(role_required("ADMIN", "CAJERO"))
+    current_user=Depends(role_required("ADMIN", "INVENTARIO")),
 ):
-    """Historial de compras por cliente"""
-    query = db.query(
-        models.client.Client.id,
-        models.client.Client.name,
-        func.count(models.sale.Sale.id).label('total_purchases'),
-        func.sum(models.sale.Sale.total_usd).label('total_spent'),
-        func.sum(models.sale.Sale.balance_usd).label('total_pending'),
-        func.max(models.sale.Sale.created_at).label('last_purchase')
-    ).join(
-        models.sale.Sale,
-        models.client.Client.id == models.sale.Sale.client_id
-    ).filter(
-        models.sale.Sale.status != "ANULADO"
+    products = (
+        db.query(models.product.Product)
+        .filter(
+            models.product.Product.stock <= models.product.Product.min_stock,
+            models.product.Product.is_active == True,
+        )
+        .order_by(models.product.Product.stock.asc())
+        .all()
     )
-    
-    if client_id:
-        query = query.filter(models.client.Client.id == client_id)
-    
-    results = query.group_by(
-        models.client.Client.id,
-        models.client.Client.name
-    ).order_by(
-        desc('total_spent')
-    ).limit(limit).all()
-    
-    return [
-        {
-            "client_id": r.id,
-            "client_name": r.name,
-            "total_purchases": r.total_purchases,
-            "total_spent_usd": round(r.total_spent, 2),
-            "total_pending_usd": round(r.total_pending, 2),
-            "last_purchase": r.last_purchase.isoformat()
-        }
-        for r in results
-    ]
+
+    # Calcular margen real también aquí
+    for p in products:
+        if p.sale_price and p.cost_price:
+            p.profit_margin = round((1 - (p.cost_price / p.sale_price)) * 100, 2)
+    return products
 
 
-@router.get("/reports/sales-by-hour")
-def sales_by_hour(
-    date_filter: Optional[str] = None,
+# 🔄 Reabastecer producto
+@router.put(
+    "/{product_id}/restock",
+    response_model=ProductOut,
+    summary="Reabastecer producto (aumentar stock)",
+    description="Permite incrementar el stock disponible de un producto específico."
+)
+def restock_product(
+    product_id: int,
+    amount: int = Query(..., gt=0, description="Cantidad a agregar al stock"),
     db: Session = Depends(get_db),
-    current_user=Depends(role_required("ADMIN"))
+    current_user=Depends(role_required("ADMIN", "INVENTARIO")),
 ):
-    """Ventas por hora del día"""
-    query = db.query(
-        func.extract('hour', models.sale.Sale.created_at).label('hour'),
-        func.count(models.sale.Sale.id).label('sales_count'),
-        func.sum(models.sale.Sale.total_usd).label('total_revenue')
-    ).filter(
-        models.sale.Sale.status != "ANULADO"
+    product = (
+        db.query(models.product.Product)
+        .filter(models.product.Product.id == product_id)
+        .first()
     )
-    
-    if date_filter:
-        target_date = datetime.strptime(date_filter, "%Y-%m-%d").date()
-        query = query.filter(func.date(models.sale.Sale.created_at) == target_date)
-    else:
-        # Por defecto, hoy
-        query = query.filter(func.date(models.sale.Sale.created_at) == date.today())
-    
-    results = query.group_by('hour').order_by('hour').all()
-    
-    return [
-        {
-            "hour": int(r.hour),
-            "sales_count": r.sales_count,
-            "total_revenue_usd": round(r.total_revenue, 2)
-        }
-        for r in results
-    ]
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+    product.stock += amount
+    db.commit()
+    db.refresh(product)
+    return product
+
+
+# ❌ Eliminar producto (soft delete)
+@router.delete(
+    "/{product_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Eliminar producto (soft delete)",
+    description="Desactiva un producto del inventario sin eliminarlo físicamente."
+)
+def delete_product(
+    product_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(role_required("ADMIN")),
+):
+    product = (
+        db.query(models.product.Product)
+        .filter(models.product.Product.id == product_id)
+        .first()
+    )
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+    product.is_active = False
+    db.commit()
+    return None
+
+# 📊 Resumen general del inventario
+@router.get(
+    "/summary",
+    summary="Resumen general del inventario",
+    description=(
+        "Devuelve métricas globales del inventario, incluyendo: "
+        "valor total a precio de costo, valor total a precio de venta, "
+        "ganancia potencial, cantidad total de productos y alertas por bajo stock."
+    ),
+)
+def get_inventory_summary(
+    db: Session = Depends(get_db),
+    current_user=Depends(role_required("ADMIN", "INVENTARIO"))
+):
+    products = db.query(models.product.Product).filter(models.product.Product.is_active == True).all()
+
+    if not products:
+        raise HTTPException(status_code=404, detail="No hay productos registrados en el inventario")
+
+    total_cost_value = sum(p.cost_price * p.stock for p in products)
+    total_sale_value = sum(p.sale_price * p.stock for p in products)
+    total_profit_potential = total_sale_value - total_cost_value
+    total_products = len(products)
+    low_stock_products = sum(1 for p in products if p.stock <= p.min_stock)
+
+    return {
+        "total_products": total_products,
+        "low_stock_alerts": low_stock_products,
+        "total_cost_value_usd": round(total_cost_value, 2),
+        "total_sale_value_usd": round(total_sale_value, 2),
+        "total_profit_potential_usd": round(total_profit_potential, 2),
+    }
