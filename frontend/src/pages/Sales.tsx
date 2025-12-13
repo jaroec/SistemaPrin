@@ -1,43 +1,52 @@
+// frontend/src/pages/SalesMovements.tsx
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import {
   Search,
   Eye,
   X as XIcon,
-  Download,
   FileText,
-  ShoppingCart,
   AlertCircle,
   Receipt,
   DollarSign,
-  Users,
-  Trash2,
   TrendingUp,
   TrendingDown,
+  Trash2,
 } from 'lucide-react';
-import api from '@/api/axios';
-import { Card } from '@/components/ui/Card';
-import { Button } from '@/components/ui/Button';
-import { formatCurrency, formatDateTime } from '@/utils/format';
 
+import api from '@/api/axios';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { Card } from '@/components/ui/Card';
+import { formatCurrency, formatDateTime } from '@/utils/format';
+import { Sale, SaleStatus } from '@/types';
+
+
+// ============================
+// API
+// ============================
 const salesApi = {
-  getAll: async () => {
-    const response = await api.get('/api/v1/pos/sales');
-    return response.data;
+  getAll: async (): Promise<Sale[]> => {
+    const res = await api.get('/api/v1/pos/sales');
+    return res.data;
   },
-  cancel: async (id) => {
-    const response = await api.post(`/api/v1/pos/sales/${id}/cancel`);
-    return response.data;
+  cancel: async (id: number) => {
+    const res = await api.post(`/api/v1/pos/sales/${id}/cancel`);
+    return res.data;
   },
 };
 
+
+// ============================
+// COMPONENTE PRINCIPAL
+// ============================
 export const Sales = () => {
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState('12');
-  const [selectedYear, setSelectedYear] = useState('2025');
-  const [filterType, setFilterType] = useState('TODOS');
-  const [selectedSale, setSelectedSale] = useState(null);
-  const [showDetailModal, setShowDetailModal] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<SaleStatus | 'ALL'>('ALL');
+  const [selectedMonth, setSelectedMonth] = useState('ALL');
+  const [selectedYear, setSelectedYear] = useState('ALL');
+
+  const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
 
   const queryClient = useQueryClient();
 
@@ -46,275 +55,168 @@ export const Sales = () => {
     queryFn: salesApi.getAll,
   });
 
+  // =============================
+  // MUTACIÓN PARA ANULAR
+  // =============================
   const annulMutation = useMutation({
-    mutationFn: (id) => salesApi.cancel(id),
+    mutationFn: (id: number) => salesApi.cancel(id),
     onSuccess: () => {
-      alert('✅ Venta anulada. Stock restaurado y balance ajustado.');
+      alert('Venta anulada correctamente');
       queryClient.invalidateQueries({ queryKey: ['sales'] });
-      setShowDetailModal(false);
+      setSelectedSale(null);
     },
-    onError: (error) => {
-      const detail = error.response?.data?.detail;
-      alert(`❌ Error: ${detail || 'No se pudo anular la venta'}`);
+    onError: (err: any) => {
+      const detail = err.response?.data?.detail;
+      alert(`Error: ${detail || 'No se pudo anular la venta'}`);
     },
   });
 
-  const handleAnnul = (id) => {
-    const confirmed = confirm(
-      '⚠️ ¿Anular esta venta?\n\n• Se restaurará el stock\n• Se ajustarán los balances\n• NO se puede revertir'
-    );
-    if (!confirmed) return;
+  const handleAnnul = (id: number) => {
+    const ok = confirm('¿Seguro que deseas anular esta venta?');
+    if (!ok) return;
     annulMutation.mutate(id);
   };
 
-  // Cálculos de estadísticas
+
+  // =============================
+  // FILTROS
+  // =============================
+  const filteredSales = sales.filter((sale) => {
+    const term = searchTerm.toLowerCase();
+    const matchesSearch =
+      sale.code.toLowerCase().includes(term) ||
+      sale.client_name?.toLowerCase().includes(term);
+
+    const matchesStatus = statusFilter === 'ALL' || sale.status === statusFilter;
+
+    const matchesMonth =
+      selectedMonth === 'ALL' ||
+      new Date(sale.created_at).getMonth() + 1 === Number(selectedMonth);
+
+    const matchesYear =
+      selectedYear === 'ALL' ||
+      new Date(sale.created_at).getFullYear() === Number(selectedYear);
+
+    return matchesSearch && matchesStatus && matchesMonth && matchesYear;
+  });
+
+
+  // =============================
+  // ESTADÍSTICAS
+  // =============================
   const stats = {
-    totalVentas: sales.length,
-    ingresos: sales
+    total: filteredSales.length,
+    ingresos: filteredSales
       .filter((s) => s.status !== 'ANULADO')
       .reduce((sum, s) => sum + s.total_usd, 0),
-    egresos: 500.00, // Mock - integrar con API
-    porCobrar: sales
-      .filter((s) => s.status === 'CREDITO' || s.status === 'PENDIENTE')
+    cobrado: filteredSales.reduce((sum, s) => sum + s.paid_usd, 0),
+    porCobrar: filteredSales
+      .filter((s) => s.status !== 'ANULADO')
       .reduce((sum, s) => sum + s.balance_usd, 0),
-    porPagar: 0.00,
+    anuladas: filteredSales.filter((s) => s.status === 'ANULADO').length,
   };
 
-  // Filtrado de ventas
-  const filteredSales = sales.filter((sale) => {
-    // Filtro de búsqueda - por cliente
-    const matchesSearch = 
-      !searchTerm || 
-      sale.client_name?.toLowerCase().includes(searchTerm.toLowerCase());
-
-    // Filtro de fecha - mes y año
-    const saleDate = new Date(sale.created_at);
-    const saleMonth = String(saleDate.getMonth() + 1).padStart(2, '0');
-    const saleYear = String(saleDate.getFullYear());
-    const matchesDate = 
-      saleMonth === selectedMonth && saleYear === selectedYear;
-
-    // Filtro de estado - según tipo de filtro
-    let matchesFilter = true;
-    
-    if (filterType === 'TODOS') {
-      // Mostrar todas las ventas y movimientos
-      matchesFilter = true;
-    } else if (filterType === 'PAGADO') {
-      // Ingresos: Ventas realizadas con éxito (PAGADO)
-      matchesFilter = sale.status === 'PAGADO';
-    } else if (filterType === 'ANULADO') {
-      // Egresos: Gastos hechos (ANULADO = descuento/gasto)
-      matchesFilter = sale.status === 'ANULADO';
-    } else if (filterType === 'CREDITO') {
-      // Por Cobrar: Cliente con saldo pendiente (CREDITO)
-      matchesFilter = sale.status === 'CREDITO' && sale.balance_usd > 0;
-    } else if (filterType === 'PENDIENTE') {
-      // Por Pagar: Proveedores que nos acreditan (PENDIENTE = deuda con proveedor)
-      matchesFilter = sale.status === 'PENDIENTE' && sale.balance_usd > 0;
-    }
-
-    return matchesSearch && matchesDate && matchesFilter;
-  });
 
   return (
     <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">Ventas y Movimientos</h1>
-          <p className="text-gray-600 mt-1">Gestiona transacciones e ingresos/egresos</p>
-        </div>
-        <Button>
-          <Download className="w-5 h-5 mr-2" />
-          Descargar
-        </Button>
+
+      {/* =================== HEADER =================== */}
+      <div>
+        <h1 className="text-3xl font-bold text-gray-900">Ventas y Movimientos</h1>
+        <p className="text-gray-600 mt-1">Historial completo de ventas y balances financieros</p>
       </div>
 
-      {/* Cierre de Caja */}
-      <div className="bg-gradient-to-r from-primary-50 to-primary-100 rounded-2xl p-6 border border-primary-200">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-primary-900 flex items-center gap-2">
-              <ShoppingCart className="w-5 h-5" />
-              Cierre de Caja
-            </h2>
-            <p className="text-sm text-primary-700 mt-1">Realiza el cierre diario del día</p>
-          </div>
-          <Button className="bg-primary-600 hover:bg-primary-700">
-            Generar Cierre
-          </Button>
-        </div>
+
+      {/* =================== ESTADÍSTICAS =================== */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Card padding="md">
+          <p className="text-sm text-gray-600">Ingresos Totales</p>
+          <p className="text-2xl font-bold text-primary-600">
+            {formatCurrency(stats.ingresos)}
+          </p>
+        </Card>
+
+        <Card padding="md">
+          <p className="text-sm text-gray-600">Cobrado</p>
+          <p className="text-2xl font-bold text-green-600">
+            {formatCurrency(stats.cobrado)}
+          </p>
+        </Card>
+
+        <Card padding="md">
+          <p className="text-sm text-gray-600">Por Cobrar</p>
+          <p className="text-2xl font-bold text-orange-600">
+            {formatCurrency(stats.porCobrar)}
+          </p>
+        </Card>
+
+        <Card padding="md">
+          <p className="text-sm text-gray-600">Anuladas</p>
+          <p className="text-2xl font-bold text-red-600">{stats.anuladas}</p>
+        </Card>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          title="Ingresos"
-          value={formatCurrency(stats.ingresos)}
-          icon={TrendingUp}
-          bgColor="bg-green-50"
-          iconColor="text-green-600"
-          borderColor="border-green-200"
-        />
-        <StatCard
-          title="Egresos"
-          value={formatCurrency(stats.egresos)}
-          icon={TrendingDown}
-          bgColor="bg-red-50"
-          iconColor="text-red-600"
-          borderColor="border-red-200"
-        />
-        <StatCard
-          title="Por Cobrar"
-          value={formatCurrency(stats.porCobrar)}
-          icon={Users}
-          bgColor="bg-orange-50"
-          iconColor="text-orange-600"
-          borderColor="border-orange-200"
-        />
-        <StatCard
-          title="Por Pagar"
-          value={formatCurrency(stats.porPagar)}
-          icon={DollarSign}
-          bgColor="bg-blue-50"
-          iconColor="text-blue-600"
-          borderColor="border-blue-200"
-        />
-      </div>
 
-      {/* Filtros */}
+      {/* =================== FILTROS =================== */}
       <Card>
-        <div className="space-y-4">
-          {/* Búsqueda */}
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Buscar por código, cliente..."
+        <div className="flex flex-col md:flex-row items-center gap-4">
+
+          {/* Buscar */}
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+            <Input
+              placeholder="Buscar por código o cliente..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
+              className="pl-10"
             />
           </div>
 
-          {/* Mes, Año y Estado */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Mes</label>
-              <select
-                value={selectedMonth}
-                onChange={(e) => setSelectedMonth(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
-              >
-                <option value="01">Enero</option>
-                <option value="02">Febrero</option>
-                <option value="03">Marzo</option>
-                <option value="04">Abril</option>
-                <option value="05">Mayo</option>
-                <option value="06">Junio</option>
-                <option value="07">Julio</option>
-                <option value="08">Agosto</option>
-                <option value="09">Septiembre</option>
-                <option value="10">Octubre</option>
-                <option value="11">Noviembre</option>
-                <option value="12">Diciembre</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Año</label>
-              <select
-                value={selectedYear}
-                onChange={(e) => setSelectedYear(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
-              >
-                <option value="2025">2025</option>
-                <option value="2024">2024</option>
-                <option value="2023">2023</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Estado</label>
-              <select
-                value={filterType}
-                onChange={(e) => setFilterType(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
-              >
-                <option value="TODOS">Todos</option>
-                <option value="PAGADO">Pagado</option>
-                <option value="CREDITO">Crédito</option>
-                <option value="PENDIENTE">Pendiente</option>
-                <option value="ANULADO">Anulado</option>
-              </select>
-            </div>
-          </div>
+          {/* Estado */}
+          <select
+            value={statusFilter}
+            onChange={(e) =>
+              setStatusFilter(e.target.value as SaleStatus | 'ALL')
+            }
+            className="px-4 py-2 border rounded-lg"
+          >
+            <option value="ALL">Todos</option>
+            <option value="PAGADO">Pagado</option>
+            <option value="CREDITO">Crédito</option>
+            <option value="PENDIENTE">Pendiente</option>
+            <option value="ANULADO">Anulado</option>
+          </select>
+
+          {/* Mes */}
+          <select
+            value={selectedMonth}
+            onChange={(e) => setSelectedMonth(e.target.value)}
+            className="px-4 py-2 border rounded-lg"
+          >
+            <option value="ALL">Todos los meses</option>
+            {Array.from({ length: 12 }, (_, i) => (
+              <option key={i + 1} value={i + 1}>{i + 1}</option>
+            ))}
+          </select>
+
+          {/* Año */}
+          <select
+            value={selectedYear}
+            onChange={(e) => setSelectedYear(e.target.value)}
+            className="px-4 py-2 border rounded-lg"
+          >
+            <option value="ALL">Todos los años</option>
+            <option value="2024">2024</option>
+            <option value="2025">2025</option>
+          </select>
         </div>
       </Card>
 
-      {/* Filter Buttons */}
-      <div className="flex flex-wrap gap-3">
-        <button
-          onClick={() => setFilterType('TODOS')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all h-10 ${
-            filterType === 'TODOS'
-              ? 'bg-primary-600 text-white'
-              : 'bg-white text-gray-700 border border-gray-200 hover:border-gray-300'
-          }`}
-        >
-          <FileText className="w-5 h-5" />
-          Todos
-        </button>
-        <button
-          onClick={() => setFilterType('PAGADO')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all h-10 ${
-            filterType === 'PAGADO'
-              ? 'bg-green-600 text-white'
-              : 'bg-white text-gray-700 border border-gray-200 hover:border-gray-300'
-          }`}
-        >
-          <TrendingUp className="w-5 h-5" />
-          Ingresos
-        </button>
-        <button
-          onClick={() => setFilterType('ANULADO')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all h-10 ${
-            filterType === 'ANULADO'
-              ? 'bg-red-600 text-white'
-              : 'bg-white text-gray-700 border border-gray-200 hover:border-gray-300'
-          }`}
-        >
-          <TrendingDown className="w-5 h-5" />
-          Egresos
-        </button>
-        <button
-          onClick={() => setFilterType('CREDITO')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all h-10 ${
-            filterType === 'CREDITO'
-              ? 'bg-orange-600 text-white'
-              : 'bg-white text-gray-700 border border-gray-200 hover:border-gray-300'
-          }`}
-        >
-          <Users className="w-5 h-5" />
-          Por Cobrar
-        </button>
-        <button
-          onClick={() => setFilterType('PENDIENTE')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all h-10 ${
-            filterType === 'PENDIENTE'
-              ? 'bg-blue-600 text-white'
-              : 'bg-white text-gray-700 border border-gray-200 hover:border-gray-300'
-          }`}
-        >
-          <DollarSign className="w-5 h-5" />
-          Por Pagar
-        </button>
-      </div>
 
-      {/* Transacciones Table */}
+      {/* =================== TABLA =================== */}
       {isLoading ? (
         <Card>
           <div className="text-center py-12">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mx-auto mb-4"></div>
             <p className="text-gray-600">Cargando ventas...</p>
           </div>
         </Card>
@@ -329,237 +231,213 @@ export const Sales = () => {
         <Card padding="none">
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200">
+              <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase">
-                    Código
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase">
-                    Cliente
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase">
-                    Fecha
-                  </th>
-                  <th className="px-6 py-4 text-right text-xs font-semibold text-gray-600 uppercase">
-                    Monto
-                  </th>
-                  <th className="px-6 py-4 text-center text-xs font-semibold text-gray-600 uppercase">
-                    Estado
-                  </th>
-                  <th className="px-6 py-4 text-right text-xs font-semibold text-gray-600 uppercase">
-                    Acciones
-                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500">Código</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500">Cliente</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500">Fecha</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500">Total</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500">Pagado</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500">Pendiente</th>
+                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-500">Estado</th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500">Acciones</th>
                 </tr>
               </thead>
+
               <tbody className="divide-y divide-gray-200">
                 {filteredSales.map((sale) => (
-                  <tr key={sale.id} className="hover:bg-gray-50 transition-colors">
+                  <tr key={sale.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 font-mono">{sale.code}</td>
+
                     <td className="px-6 py-4">
-                      <span className="text-sm font-mono font-semibold text-primary-600">
-                        {sale.code}
-                      </span>
+                      <p className="font-medium">{sale.client_name || "Público General"}</p>
+                      {sale.client_phone && (
+                        <p className="text-xs text-gray-500">{sale.client_phone}</p>
+                      )}
                     </td>
-                    <td className="px-6 py-4">
-                      <span className="text-sm font-medium text-gray-900">
-                        {sale.client_name || 'Público General'}
-                      </span>
+
+                    <td className="px-6 py-4">{formatDateTime(sale.created_at)}</td>
+
+                    <td className="px-6 py-4 text-right font-semibold">
+                      {formatCurrency(sale.total_usd)}
                     </td>
-                    <td className="px-6 py-4">
-                      <span className="text-sm text-gray-600">
-                        {formatDateTime(sale.created_at).split(',')[0]}
-                      </span>
+
+                    <td className="px-6 py-4 text-right text-green-600">
+                      {formatCurrency(sale.paid_usd)}
                     </td>
-                    <td className="px-6 py-4 text-right">
-                      <span className="text-sm font-semibold text-gray-900">
-                        {formatCurrency(sale.total_usd)}
-                      </span>
+
+                    <td className="px-6 py-4 text-right text-orange-600">
+                      {formatCurrency(sale.balance_usd)}
                     </td>
-                    <td className="px-6 py-4">
-                      <div className="flex justify-center">
-                        <span
-                          className={`inline-flex px-3 py-1 text-xs font-medium rounded-full ${
-                            sale.status === 'PAGADO'
-                              ? 'bg-green-100 text-green-700'
-                              : sale.status === 'CREDITO'
-                              ? 'bg-orange-100 text-orange-700'
-                              : sale.status === 'ANULADO'
-                              ? 'bg-red-100 text-red-700'
-                              : 'bg-yellow-100 text-yellow-700'
-                          }`}
-                        >
-                          {sale.status}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <button
-                        onClick={() => {
-                          setSelectedSale(sale);
-                          setShowDetailModal(true);
-                        }}
-                        className="p-2 text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+
+                    <td className="px-6 py-4 text-center">
+                      <span
+                        className={`px-2 py-1 text-xs rounded-full ${
+                          sale.status === 'PAGADO'
+                            ? 'bg-green-100 text-green-700'
+                            : sale.status === 'CREDITO'
+                            ? 'bg-orange-100 text-orange-700'
+                            : sale.status === 'ANULADO'
+                            ? 'bg-red-100 text-red-700'
+                            : 'bg-gray-100 text-gray-700'
+                        }`}
                       >
-                        <Eye className="w-5 h-5" />
-                      </button>
+                        {sale.status}
+                      </span>
+                    </td>
+
+                    <td className="px-6 py-4 text-right">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setSelectedSale(sale)}
+                      >
+                        <Eye className="w-4 h-4 mr-1" />
+                        Ver
+                      </Button>
                     </td>
                   </tr>
                 ))}
               </tbody>
+
             </table>
           </div>
         </Card>
       )}
 
-      {/* Detail Modal */}
-      {showDetailModal && selectedSale && (
+
+      {/* =================== MODAL DETALLE =================== */}
+      {selectedSale && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+
             {/* Header */}
-            <div className="p-6 border-b border-gray-200 flex items-center justify-between sticky top-0 bg-white z-10">
+            <div className="p-6 border-b flex justify-between bg-white sticky top-0">
               <div className="flex items-center gap-3">
                 <Receipt className="w-6 h-6 text-primary-600" />
                 <div>
-                  <h2 className="text-2xl font-bold text-gray-900">{selectedSale.code}</h2>
-                  <p className="text-sm text-gray-600">
-                    {formatDateTime(selectedSale.created_at)}
-                  </p>
+                  <h2 className="text-2xl font-bold">{selectedSale.code}</h2>
+                  <p className="text-sm text-gray-600">{formatDateTime(selectedSale.created_at)}</p>
                 </div>
               </div>
-              <button
-                onClick={() => setShowDetailModal(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg"
-              >
-                <XIcon className="w-6 h-6" />
-              </button>
+
+              <div className="flex items-center gap-3">
+                {selectedSale.status !== "ANULADO" && (
+                  <button
+                    onClick={() => handleAnnul(selectedSale.id)}
+                    disabled={annulMutation.isPending}
+                    className="px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg"
+                  >
+                    Anular Venta
+                  </button>
+                )}
+
+                <button
+                  onClick={() => setSelectedSale(null)}
+                  className="p-2 hover:bg-gray-100 rounded-lg"
+                >
+                  <XIcon className="w-6 h-6" />
+                </button>
+              </div>
             </div>
 
-            {/* Content */}
+            {/* Body */}
             <div className="p-6 space-y-6">
+
               {selectedSale.status === 'ANULADO' && (
                 <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex gap-3">
-                  <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
-                  <p className="text-sm text-red-700">
-                    <strong>Venta Anulada:</strong> Stock y balances han sido restaurados.
-                  </p>
+                  <AlertCircle className="w-5 h-5 text-red-600" />
+                  <div>
+                    <p className="font-medium text-red-900">Venta Anulada</p>
+                    <p className="text-sm text-red-700">
+                      Stock restaurado y balance ajustado.
+                    </p>
+                  </div>
                 </div>
               )}
 
               {/* Cliente */}
               <div>
-                <p className="text-sm font-medium text-gray-500 mb-2">Cliente</p>
-                <p className="text-lg font-semibold text-gray-900">
-                  {selectedSale.client_name || 'Público General'}
-                </p>
+                <h3 className="text-sm text-gray-500 mb-1">Cliente</h3>
+                <p className="text-lg font-semibold">{selectedSale.client_name || "Público General"}</p>
+                {selectedSale.client_phone && (
+                  <p className="text-sm text-gray-600">{selectedSale.client_phone}</p>
+                )}
               </div>
 
               {/* Productos */}
               <div>
-                <p className="text-sm font-medium text-gray-500 mb-3">Productos</p>
+                <h3 className="text-sm text-gray-500 mb-1">Productos</h3>
                 <div className="space-y-2">
-                  {selectedSale.details.map((detail) => (
-                    <div key={detail.id} className="flex justify-between p-3 bg-gray-50 rounded-lg">
+                  {selectedSale.details.map((d) => (
+                    <div key={d.id} className="p-3 bg-gray-50 rounded-lg flex justify-between">
                       <div>
-                        <p className="font-medium text-gray-900">{detail.product_name}</p>
+                        <p className="font-medium">{d.product_name}</p>
                         <p className="text-sm text-gray-600">
-                          {detail.quantity} × {formatCurrency(detail.price_usd)}
+                          {d.quantity} × {formatCurrency(d.price_usd)}
                         </p>
                       </div>
-                      <p className="font-semibold text-gray-900">
-                        {formatCurrency(detail.subtotal_usd)}
-                      </p>
+                      <p className="font-semibold">{formatCurrency(d.subtotal_usd)}</p>
                     </div>
                   ))}
                 </div>
               </div>
 
-              {/* Totales */}
-              <div className="border-t border-gray-200 pt-4 space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-600">Subtotal:</span>
-                  <span className="font-semibold">{formatCurrency(selectedSale.subtotal_usd)}</span>
-                </div>
-                {selectedSale.discount_usd > 0 && (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Descuento:</span>
-                    <span className="font-semibold text-red-600">
-                      -{formatCurrency(selectedSale.discount_usd)}
-                    </span>
-                  </div>
-                )}
-                <div className="flex justify-between text-lg font-bold pt-2 border-t border-gray-200">
-                  <span>Total:</span>
-                  <span className="text-primary-600">{formatCurrency(selectedSale.total_usd)}</span>
-                </div>
-              </div>
-
               {/* Pagos */}
-              <div>
-                <p className="text-sm font-medium text-gray-500 mb-2">Información de Pago</p>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between p-3 bg-green-50 rounded-lg">
-                    <span className="text-green-700 font-medium">Pagado:</span>
-                    <span className="font-semibold text-green-600">
-                      {formatCurrency(selectedSale.paid_usd)}
-                    </span>
+              {selectedSale.payments.length > 0 && (
+                <div>
+                  <h3 className="text-sm text-gray-500 mb-1">Pagos Registrados</h3>
+                  <div className="space-y-2">
+                    {selectedSale.payments.map((p, idx) => (
+                      <div key={idx} className="p-3 bg-gray-50 rounded-lg flex justify-between">
+                        <div>
+                          <p className="font-medium">{p.method}</p>
+                          {p.reference && <p className="text-sm text-gray-600">{p.reference}</p>}
+                        </div>
+                        <p className="font-semibold">{formatCurrency(p.amount_usd)}</p>
+                      </div>
+                    ))}
                   </div>
-                  {selectedSale.balance_usd > 0 && (
-                    <div className="flex justify-between p-3 bg-orange-50 rounded-lg">
-                      <span className="text-orange-700 font-medium">Por Cobrar:</span>
-                      <span className="font-semibold text-orange-600">
-                        {formatCurrency(selectedSale.balance_usd)}
-                      </span>
-                    </div>
-                  )}
                 </div>
-              </div>
+              )}
 
-              {/* Botones */}
-              <div className="flex gap-3 pt-4 border-t border-gray-200">
-                {selectedSale.status !== 'ANULADO' && selectedSale.balance_usd > 0 && (
-                  <Button className="flex-1">
-                    <DollarSign className="w-4 h-4 mr-2" />
-                    Abonar
-                  </Button>
+              {/* Totales */}
+              <div className="border-t pt-4 space-y-2">
+                <div className="flex justify-between text-gray-600">
+                  <span>Subtotal:</span>
+                  <span>{formatCurrency(selectedSale.subtotal_usd)}</span>
+                </div>
+
+                {selectedSale.discount_usd > 0 && (
+                  <div className="flex justify-between text-gray-600">
+                    <span>Descuento:</span>
+                    <span>-{formatCurrency(selectedSale.discount_usd)}</span>
+                  </div>
                 )}
 
-                {selectedSale.status !== 'ANULADO' && (
-                  <Button
-                    onClick={() => handleAnnul(selectedSale.id)}
-                    variant="danger"
-                    className="flex-1"
-                  >
-                    <Trash2 className="w-4 h-4 mr-2" />
-                    Anular
-                  </Button>
-                )}
+                <div className="flex justify-between text-xl font-bold">
+                  <span>Total:</span>
+                  <span>{formatCurrency(selectedSale.total_usd)}</span>
+                </div>
 
-                <Button
-                  onClick={() => setShowDetailModal(false)}
-                  variant="secondary"
-                  className="flex-1"
-                >
-                  Cerrar
-                </Button>
+                <div className="flex justify-between text-green-600">
+                  <span>Pagado:</span>
+                  <span className="font-semibold">{formatCurrency(selectedSale.paid_usd)}</span>
+                </div>
+
+                {selectedSale.balance_usd > 0 && (
+                  <div className="flex justify-between text-orange-600 border-t pt-2">
+                    <span>Pendiente:</span>
+                    <span className="font-semibold">{formatCurrency(selectedSale.balance_usd)}</span>
+                  </div>
+                )}
               </div>
+
             </div>
           </div>
         </div>
       )}
+
     </div>
   );
 };
-
-// StatCard Component
-const StatCard = ({ title, value, icon: Icon, bgColor, iconColor, borderColor }) => (
-  <Card padding="md" className={`${bgColor} border ${borderColor}`}>
-    <div className="flex items-start justify-between">
-      <div>
-        <p className="text-sm text-gray-600 mb-1">{title}</p>
-        <p className="text-2xl font-bold text-gray-900">{value}</p>
-      </div>
-      <div className={`p-3 rounded-xl ${bgColor}`}>
-        <Icon className={`w-6 h-6 ${iconColor}`} />
-      </div>
-    </div>
-  </Card>
-);
