@@ -5,8 +5,17 @@ import { useMutation } from '@tanstack/react-query';
 import { ShoppingCart, Loader } from 'lucide-react';
 import { authApi } from '@/api/auth';
 import { useAuthStore } from '@/store/authStore';
+import api from '@/api/axios';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
+import { ExchangeRateModal } from '@/components/exchange/ExchangeRateModal';
+
+const exchangeRateApi = {
+  checkToday: async () => {
+    const response = await api.get('/api/v1/exchange-rate/check-today');
+    return response.data;
+  },
+};
 
 export const Login = () => {
   const navigate = useNavigate();
@@ -15,15 +24,36 @@ export const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [showExchangeModal, setShowExchangeModal] = useState(false);
 
-  // LOGIN MUTATION
   const loginMutation = useMutation({
     mutationFn: authApi.login,
     onSuccess: async (data) => {
       try {
         const user = await authApi.getProfile();
         setAuth(user, data.access_token);
-        navigate('/');
+
+        // ✅ Verificar si necesita configurar tasa del día
+        if (user.role === 'ADMIN' || user.role === 'CAJERO') {
+          try {
+            const rateCheck = await exchangeRateApi.checkToday();
+            
+            if (!rateCheck.exists) {
+              // No existe tasa del día, mostrar modal
+              setShowExchangeModal(true);
+            } else {
+              // Ya existe tasa, continuar al dashboard
+              navigate('/');
+            }
+          } catch (err) {
+            console.warn('Error al verificar tasa:', err);
+            // Si falla la verificación, continuar igual
+            navigate('/');
+          }
+        } else {
+          // Otros roles van directo al sistema
+          navigate('/');
+        }
       } catch (err: any) {
         console.error('Error al obtener perfil:', err);
         setError('Error al obtener datos del usuario');
@@ -58,77 +88,96 @@ export const Login = () => {
     loginMutation.mutate({ username: email, password });
   };
 
+  const handleExchangeRateSuccess = (rate: number) => {
+    console.log('✅ Tasa configurada:', rate);
+    setShowExchangeModal(false);
+    navigate('/');
+  };
+
   const loading = loginMutation.isPending;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary-50 to-primary-100 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-8">
-        
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-primary-600 rounded-2xl mb-4">
-            <ShoppingCart className="w-8 h-8 text-white" />
+    <>
+      <div className="min-h-screen bg-gradient-to-br from-primary-50 to-primary-100 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-8">
+          
+          {/* Logo */}
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center justify-center w-16 h-16 bg-primary-600 rounded-2xl mb-4">
+              <ShoppingCart className="w-8 h-8 text-white" />
+            </div>
+
+            <h1 className="text-3xl font-bold text-gray-900">Sistema POS</h1>
+            <p className="text-gray-600 mt-1">Inicia sesión para continuar</p>
           </div>
 
-          <h1 className="text-3xl font-bold text-gray-900">Sistema POS</h1>
-          <p className="text-gray-600 mt-1">Inicia sesión para continuar</p>
-        </div>
-
-        {/* FORM */}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
-              {error}
-            </div>
-          )}
-
-          {/* Email */}
-          <Input
-            label="Correo Electrónico"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="usuario@ejemplo.com"
-            autoComplete="email"
-            disabled={loading}
-          />
-
-          {/* Password */}
-          <Input
-            label="Contraseña"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="••••••••"
-            autoComplete="current-password"
-            disabled={loading}
-          />
-
-          {/* Botón */}
-          <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? (
-              <>
-                <Loader className="w-5 h-5 mr-2 animate-spin" />
-                Iniciando sesión...
-              </>
-            ) : (
-              "Iniciar Sesión"
+          {/* FORM */}
+          <form onSubmit={handleSubmit} className="space-y-4">
+            
+            {error && (
+              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+                {error}
+              </div>
             )}
-          </Button>
-        </form>
 
-        {/* Credenciales demo */}
-        <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-          <p className="text-sm text-gray-600 mb-2 font-medium">
-            Credenciales de prueba:
-          </p>
-          <div className="space-y-1 text-sm text-gray-700">
-            <p><strong>Admin:</strong> admin@pos.com / admin123</p>
-            <p><strong>Cajero:</strong> cajero@pos.com / cajero123</p>
+            {/* Email */}
+            <Input
+              label="Correo Electrónico"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="usuario@ejemplo.com"
+              autoComplete="email"
+              disabled={loading}
+            />
+
+            {/* Password */}
+            <Input
+              label="Contraseña"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              autoComplete="current-password"
+              disabled={loading}
+            />
+
+            {/* Botón */}
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? (
+                <>
+                  <Loader className="w-5 h-5 mr-2 animate-spin" />
+                  Iniciando sesión...
+                </>
+              ) : (
+                "Iniciar Sesión"
+              )}
+            </Button>
+          </form>
+
+          {/* Credenciales demo */}
+          <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+            <p className="text-sm text-gray-600 mb-2 font-medium">
+              Credenciales de prueba:
+            </p>
+            <div className="space-y-1 text-sm text-gray-700">
+              <p><strong>Admin:</strong> admin@pos.com / admin123</p>
+              <p><strong>Cajero:</strong> cajero@pos.com / cajero123</p>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+
+      {/* Modal de Tasa de Cambio */}
+      {showExchangeModal && (
+        <ExchangeRateModal
+          onClose={() => {
+            setShowExchangeModal(false);
+            navigate('/');
+          }}
+          onSuccess={handleExchangeRateSuccess}
+        />
+      )}
+    </>
   );
 };
