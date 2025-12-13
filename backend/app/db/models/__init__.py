@@ -6,5 +6,6 @@ from app.db.models.sale import Sale
 from app.db.models.sale_detail import SaleDetail
 from app.db.models.payment import Payment
 from app.db.models.revoked_token import RevokedToken
+from app.db.models.exchange_rate import ExchangeRate
 
-__all__ = ["User", "Client", "Product", "Sale", "SaleDetail", "Payment", "RevokedToken"]
+__all__ = ["User", "Client", "Product", "Sale", "SaleDetail", "Payment", "RevokedToken", "ExchangeRate"]
