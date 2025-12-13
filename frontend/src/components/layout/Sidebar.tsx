@@ -7,6 +7,7 @@ import {
   FileText,
   LogOut,
   Shield,
+  DollarSign,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import clsx from 'clsx';
@@ -22,9 +23,14 @@ const navigation: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { name: 'Punto de Venta', href: '/', icon: ShoppingCart },
   { name: 'Productos', href: '/products', icon: Package },
-  { name: 'Ventas', href: '/sales', icon: FileText },
+  { name: 'Ventas y Movimientos', href: '/sales', icon: FileText },
   { name: 'Clientes', href: '/clients', icon: Users },
-  // ✅ NUEVO: Gestión de Usuarios - Solo para ADMIN
+  {
+    name: 'Tasa de Cambio',
+    href: '/exchange-rate',
+    icon: DollarSign,
+    roles: ['ADMIN', 'CAJERO'],
+  },
   {
     name: 'Gestión de Usuarios',
     href: '/register-user',
@@ -42,7 +48,7 @@ export const Sidebar = () => {
   // ✅ LOGOUT MEJORADO
   const handleLogout = async () => {
     try {
-      const confirmed = window.confirm("¿Estás seguro de cerrar sesión?");
+      const confirmed = window.confirm('¿Estás seguro de cerrar sesión?');
       if (!confirmed) return;
 
       await logout();
@@ -70,7 +76,7 @@ export const Sidebar = () => {
           </div>
           <div>
             <h1 className="text-xl font-bold text-gray-900">FinkuPOS</h1>
-            <p className="text-xs text-gray-500">v1.0</p>
+            <p className="text-xs text-gray-500">v2.0</p>
           </div>
         </Link>
       </div>
@@ -125,4 +131,4 @@ export const Sidebar = () => {
       </div>
     </aside>
   );
-};
+}
