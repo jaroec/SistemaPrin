@@ -1,30 +1,78 @@
-# backend/app/main.py
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from seed import seed_admin
-from app.api.v1 import products, clients, auth, pos, reports, search, dashboard, exchange_rate
-from app.db.base import Base, engine
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from contextlib import asynccontextmanager
+import logging
 
-# Crear tablas (solo para desarrollo; en producción usar alembic)
+from seed import seed_admin
+
+from app.db.base import Base, engine
+from app.core.config import settings
+
+# Routers API v1 (IMPORTS LIMPIOS Y REALES)
+from app.api.v1 import (
+    auth,
+    products,
+    clients,
+    pos,
+    expenses,
+    exports,
+    dashboard_financial,
+    reports,
+    dashboard,
+    cash_register,
+    search,
+    exchange_rate,
+    cash_flow,
+)
+
+
+logger = logging.getLogger(__name__)
+
+# Crear tablas
 Base.metadata.create_all(bind=engine)
 
+# Rate Limiter
+limiter = Limiter(key_func=get_remote_address)
+
+# Startup event
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("🟢 Iniciando servidor...")
+    seed_admin()
+    yield
+    logger.info("🔴 Apagando servidor...")
+
+# Crear app
 app = FastAPI(
-    title="Supersistema de Venta",
-    version="2.0.0",
-    description="Sistema integral de ventas POS con gestión de inventario, clientes y reportes"
+    title="Sistema POS - Gestor de Ventas",
+    version="2.1.0",
+    description="Sistema integral de ventas POS con gestión de inventario",
+    lifespan=lifespan
 )
+
+# ==========================================
+# MIDDLEWARE
+# ==========================================
 
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # En producción, especifica dominios permitidos
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*", "Authorization"],
+    allow_origins=settings.get_allowed_origins,
+    allow_credentials=settings.CORS_CREDENTIALS,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["*"],
+    max_age=3600,
 )
 
-# Rutas principales
+app.state.limiter = limiter
+
+# ==========================================
+# RUTAS
+# ==========================================
+
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["🔐 Autenticación"])
 app.include_router(search.router, prefix="/api/v1", tags=["🔍 Búsqueda"])
 app.include_router(products.router, prefix="/api/v1/products", tags=["📦 Productos"])
@@ -33,15 +81,17 @@ app.include_router(pos.router, prefix="/api/v1/pos", tags=["🛒 Punto de Venta"
 app.include_router(reports.router, prefix="/api/v1", tags=["📊 Reportes"])
 app.include_router(dashboard.router, prefix="/api/v1", tags=["📈 Dashboard"])
 app.include_router(exchange_rate.router, prefix="/api/v1", tags=["💱 Tasa de Cambio"])
+app.include_router(cash_flow.router, prefix="/api/v1/cash-flow", tags=["💰 Flujo de Caja"])
+app.include_router(expenses.router, prefix="/api/v1", tags=["💰 Gastos"])
+app.include_router( exports.router, prefix="/api/v1", tags=["📤 Exportaciones"])
+app.include_router(dashboard_financial.router, prefix="/api/v1", tags=["📊 Dashboard Financiero"])
+app.include_router(cash_register.router, prefix="/api/v1")
 
-# Seed del usuario admin
-@app.on_event("startup")
-def startup_event():
-    print("🟢 Iniciando servidor y verificando usuario admin...")
-    seed_admin()
 
+# ==========================================
+# OPENAPI SECURITY
+# ==========================================
 
-# ✅ CONFIGURACIÓN OPENAPI CORREGIDA
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
@@ -53,7 +103,6 @@ def custom_openapi():
         routes=app.routes,
     )
 
-    # ✅ Configuración correcta de seguridad OAuth2
     openapi_schema["components"]["securitySchemes"] = {
         "OAuth2PasswordBearer": {
             "type": "oauth2",
@@ -66,14 +115,12 @@ def custom_openapi():
         }
     }
 
-    # ✅ Aplicar seguridad globalmente (todos los endpoints protegidos por defecto)
     openapi_schema["security"] = [{"OAuth2PasswordBearer": []}]
 
-    # ✅ Excepciones: endpoints públicos (no requieren auth)
     public_paths = [
         "/api/v1/auth/token",
         "/api/v1/auth/register",
-        "/api/v1/exchange-rate/today",  # ✅ Público para el POS
+        "/api/v1/exchange-rate/today",
         "/",
         "/health",
         "/docs",
@@ -84,25 +131,30 @@ def custom_openapi():
         if path in public_paths:
             for method in methods.values():
                 if isinstance(method, dict):
-                    method["security"] = []  # Sin autenticación
+                    method["security"] = []
 
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
 app.openapi = custom_openapi
 
+# ==========================================
+# ENDPOINTS PÚBLICOS
+# ==========================================
 
-@app.get("/")
+@app.get("/", tags=["📋 Health"])
 def root():
     return {
-        "message": "Supersistema de Venta API v2.0",
-        "status": "active",
-        "docs": "/docs",
-        "redoc": "/redoc"
+        "message": "Sistema POS v2.1.0",
+        "status": "activo",
+        "environment": settings.ENVIRONMENT,
+        "docs": "/docs"
     }
 
-
-@app.get("/health")
+@app.get("/health", tags=["📋 Health"])
 def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy", "service": "pos-backend"}
+    return {
+        "status": "healthy",
+        "service": "pos-backend",
+        "environment": settings.ENVIRONMENT
+    }
