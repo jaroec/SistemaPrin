@@ -86,11 +86,14 @@ def close_cash_register(db: Session, user_id: int) -> CashRegister:
     return cash_register
 
 def calculate_system_amount(db: Session, cash_register_id: int) -> float:
-    total = db.query(
-        func.sum(models.cash_movement.CashMovement.amount_usd)
-    ).filter(
-        models.cash_movement.CashMovement.cash_register_id == cash_register_id,
-        models.cash_movement.CashMovement.status == "CONFIRMADO"
+    ingresos = db.query(func.coalesce(func.sum(CashMovement.amount), 0)).filter(
+        CashMovement.cash_register_id == cash_register_id,
+        CashMovement.type == MovementType.INGRESO
     ).scalar()
 
-    return float(total or 0)
+    egresos = db.query(func.coalesce(func.sum(CashMovement.amount), 0)).filter(
+        CashMovement.cash_register_id == cash_register_id,
+        CashMovement.type == MovementType.EGRESO
+    ).scalar()
+
+    return float(ingresos) - float(egresos)
