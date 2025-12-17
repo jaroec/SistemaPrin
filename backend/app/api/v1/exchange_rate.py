@@ -12,7 +12,6 @@ from app.db.models.user import User
 
 router = APIRouter(prefix="/exchange-rate", tags=["Exchange Rate"])
 
-
 @router.post("/", response_model=ExchangeRateOut)
 def create_rate(
     rate: ExchangeRateCreate,
