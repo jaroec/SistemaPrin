@@ -12,7 +12,6 @@ class SaleStatus(str, enum.Enum):
     CREDIT = "CREDIT"
     CANCELLED = "CANCELLED"
 
-
 class Sale(Base):
     __tablename__ = "sales"
 
