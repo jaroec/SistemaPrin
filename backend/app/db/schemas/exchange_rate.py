@@ -16,4 +16,4 @@ class ExchangeRateOut(ExchangeRateBase):
     id: int
 
     class Config:
-        orm_mode = True
+        from_attributes = True
