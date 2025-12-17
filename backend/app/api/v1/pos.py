@@ -54,125 +54,129 @@ def create_sale(
     current_user=Depends(role_required("CAJERO", "ADMIN"))
 ):
     try:
-        with db.begin():  # 🔐 TRANSACCIÓN ATÓMICA REAL
+        # 1. Caja abierta
+        cash_register = db.query(models.cash_register.CashRegister).filter(
+            models.cash_register.CashRegister.status == "OPEN",
+            models.cash_register.CashRegister.opened_by_user_id == current_user.id
+        ).first()
 
-            # 0. Validar caja abierta
-            cash_register = db.query(models.cash_register.CashRegister).filter(
-                models.cash_register.CashRegister.status == "OPEN",
-                models.cash_register.CashRegister.opened_by_user_id == current_user.id
-            ).first()
+        if not cash_register:
+            raise HTTPException(400, "No hay una caja abierta para este usuario")
 
-            if not cash_register:
-                raise HTTPException(400, "No hay una caja abierta para este usuario")
+        # 2. Cliente
+        client = None
+        if payload.client_id:
+            client = db.query(models.client.Client).get(payload.client_id)
+            if not client:
+                raise HTTPException(404, "Cliente no encontrado")
 
-            # 1. Cliente
-            client = None
-            if payload.client_id:
-                client = db.query(models.client.Client).get(payload.client_id)
-                if not client:
-                    raise HTTPException(404, "Cliente no encontrado")
+        # 3. Productos
+        subtotal = 0.0
+        details_data = []
 
-            # 2. Validar productos
-            subtotal = 0.0
-            details_data = []
+        for item in payload.items:
+            product = db.query(models.product.Product).filter(
+                models.product.Product.id == item.product_id,
+                models.product.Product.is_active == True
+            ).with_for_update().first()
 
-            for item in payload.items:
-                product = db.query(models.product.Product).filter(
-                    models.product.Product.id == item.product_id,
-                    models.product.Product.is_active == True
-                ).with_for_update().first()
+            if not product:
+                raise HTTPException(404, f"Producto {item.product_id} no encontrado")
 
-                if not product:
-                    raise HTTPException(404, f"Producto {item.product_id} no encontrado")
+            if product.stock < item.quantity:
+                raise HTTPException(400, f"Stock insuficiente para {product.name}")
 
-                if product.stock < item.quantity:
-                    raise HTTPException(
-                        400,
-                        f"Stock insuficiente para {product.name}"
-                    )
+            item_subtotal = round(product.sale_price * item.quantity, 2)
+            subtotal += item_subtotal
+            details_data.append((product, item, item_subtotal))
 
-                item_subtotal = round(product.sale_price * item.quantity, 2)
-                subtotal += item_subtotal
+        discount = payload.discount_usd or 0.0
+        total = round(subtotal - discount, 2)
 
-                details_data.append((product, item, item_subtotal))
+        # 4. Crear venta
+        sale = models.sale.Sale(
+            code=generate_sale_code(db),
+            client_id=client.id if client else None,
+            seller_id=payload.seller_id,
+            subtotal_usd=subtotal,
+            discount_usd=discount,
+            total_usd=total,
+            paid_usd=0.0,
+            balance_usd=total,
+            status=models.sale.SaleStatus.PENDING
+        )
+        db.add(sale)
+        db.flush()
 
-            discount = payload.discount_usd or 0.0
-            total = round(subtotal - discount, 2)
+        # 5. Detalles y stock
+        for product, item, item_subtotal in details_data:
+            db.add(models.sale_detail.SaleDetail(
+                sale_id=sale.id,
+                product_id=product.id,
+                quantity=item.quantity,
+                price_usd=product.sale_price,
+                subtotal_usd=item_subtotal
+            ))
+            product.stock -= item.quantity
 
-            # 3. Crear venta
-            sale = models.sale.Sale(
-                code=generate_sale_code(db),
-                client_id=client.id if client else None,
-                seller_id=payload.seller_id,
-                subtotal_usd=subtotal,
-                discount_usd=discount,
-                total_usd=total,
-                paid_usd=0.0,
-                balance_usd=total,
-                status=models.sale.SaleStatus.PENDING
+        # 6. Pagos + movimientos de caja
+        total_paid = 0.0
+        credit_used = 0.0
+
+        for p in payload.payments:
+            amount = round(p.amount_usd, 2)
+            method = p.method.value.upper()
+
+            payment = models.payment.Payment(
+                sale_id=sale.id,
+                method=method,
+                amount_usd=amount,
+                reference=p.reference
             )
-            db.add(sale)
+            db.add(payment)
             db.flush()
 
-            # 4. Detalles + stock
-            for product, item, item_subtotal in details_data:
-                db.add(models.sale_detail.SaleDetail(
-                    sale_id=sale.id,
-                    product_id=product.id,
-                    quantity=item.quantity,
-                    price_usd=product.sale_price,
-                    subtotal_usd=item_subtotal
-                ))
-                product.stock -= item.quantity
+            if method == "CREDITO":
+                credit_used += amount
+            else:
+                total_paid += amount
 
-            # 5. Pagos + movimientos de caja
-            total_paid = 0.0
-            credit_used = 0.0
-
-            for p in payload.payments:
-                amount = round(p.amount_usd, 2)
-                method = p.method.value
-
-                db.add(models.payment.Payment(
-                    sale_id=sale.id,
-                    method=method,
+                db.add(models.cash_movement.CashMovement(
+                    type=models.cash_movement.MovementType.INGRESO,
                     amount_usd=amount,
-                    reference=p.reference
+                    amount=amount,
+                    currency="USD",
+                    payment_method=method,
+                    reference=p.reference,
+                    payment_id=payment.id,
+                    reference_id=sale.id,
+                    description=f"Venta {sale.code}",
+                    category="VENTA",
+                    notes=None,
+                    created_by_user_id=current_user.id,
+                    created_by_name=current_user.name or current_user.email,
+                    cash_register_id=cash_register.id
                 ))
 
-                if method == "CREDITO":
-                    credit_used += amount
-                else:
-                    total_paid += amount
+        sale.paid_usd = total_paid
+        sale.balance_usd = round(total - total_paid, 2)
 
-                    db.add(models.cash_movement.CashMovement(
-                        type=models.cash_movement.MovementType.INGRESO,
-                        amount_usd=amount,
-                        payment_method=method,
-                        cash_register_id=cash_register.id,
-                        reference_id=str(sale.id),
-                        description=f"Venta {sale.code}",
-                        created_by_user_id=current_user.id
-                    ))
+        if sale.balance_usd == 0:
+            sale.status = models.sale.SaleStatus.PAID
+        elif credit_used > 0:
+            sale.status = models.sale.SaleStatus.CREDIT
+            if client:
+                client.balance = round((client.balance or 0) + credit_used, 2)
 
-            sale.paid_usd = total_paid
-            sale.balance_usd = round(total - total_paid, 2)
-
-            # 6. Estados finales
-            if sale.balance_usd == 0:
-                sale.status = models.sale.SaleStatus.PAID
-            elif credit_used > 0:
-                sale.status = models.sale.SaleStatus.CREDIT
-                client.balance += credit_used
-
+        db.commit()
         return sale
 
     except HTTPException:
+        db.rollback()
         raise
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"Error al crear venta: {str(e)}")
-
 
 @router.put("/sales/{sale_id}/annul", status_code=status.HTTP_200_OK)
 def annul_sale(
@@ -265,96 +269,76 @@ def pay_sale(
     db: Session = Depends(get_db),
     current_user=Depends(role_required("CAJERO", "ADMIN"))
 ):
-    """
-    ✅ ACTUALIZADO: Registrar abonos y crear movimientos de caja
-    """
     sale = db.query(models.sale.Sale).filter(models.sale.Sale.id == sale_id).first()
 
     if not sale:
-        raise HTTPException(status_code=404, detail="Venta no encontrada")
+        raise HTTPException(404, "Venta no encontrada")
 
-    if sale.status == "ANULADO":
-        raise HTTPException(status_code=400, detail="No se puede pagar una venta anulada")
+    if sale.status in ["ANULADO", "PAGADO"]:
+        raise HTTPException(400, "No se puede pagar esta venta")
 
-    if sale.status == "PAGADO":
-        raise HTTPException(status_code=400, detail="Esta venta ya está completamente pagada")
+    cash_register = db.query(models.cash_register.CashRegister).filter(
+        models.cash_register.CashRegister.status == "OPEN",
+        models.cash_register.CashRegister.opened_by_user_id == current_user.id
+    ).first()
 
-    # Validar que no se envíe CREDITO
+    if not cash_register:
+        raise HTTPException(400, "No hay caja abierta")
+
+    total_new = 0.0
+    new_payments = []
+
     for p in payments:
         if p.method == PaymentMethodEnum.CREDITO:
-            raise HTTPException(status_code=400, detail="No se acepta CREDITO en abonos")
+            raise HTTPException(400, "No se acepta crédito en abonos")
 
-    total_new_payments = sum(round(p.amount_usd, 2) for p in payments)
-    if total_new_payments > sale.balance_usd:
-        raise HTTPException(
-            status_code=400,
-            detail=f"El monto ({total_new_payments}) excede el balance restante ({sale.balance_usd})"
-        )
+        amount = round(p.amount_usd, 2)
+        total_new += amount
 
-    # Registrar pagos
-    total_paid = sale.paid_usd
-    new_payment_records = []
-    
-    for payment_data in payments:
-        amount = round(payment_data.amount_usd, 2)
-        method = payment_data.method.value.upper()
         payment = models.payment.Payment(
             sale_id=sale.id,
-            method=method,
+            method=p.method.value.upper(),
             amount_usd=amount,
-            reference=payment_data.reference
+            reference=p.reference
         )
         db.add(payment)
-        new_payment_records.append(payment)
-        total_paid += amount
+        db.flush()
+        new_payments.append(payment)
 
-    sale.paid_usd = round(total_paid, 2)
-    sale.balance_usd = round(max(sale.total_usd - sale.paid_usd, 0.0), 2)
+    if total_new > sale.balance_usd:
+        raise HTTPException(400, "El monto excede el balance")
 
-    if sale.balance_usd == 0:
-        sale.status = "PAGADO"
-    else:
-        has_credit_record = any(p.method.upper() == "CREDITO" for p in sale.payments)
-        sale.status = "CREDITO" if has_credit_record else "PENDIENTE"
-
-    # Reducir balance del cliente
-    if sale.client_id:
-        client = db.query(models.client.Client).filter(
-            models.client.Client.id == sale.client_id
-        ).first()
-        if client:
-            client.balance = round(max(0, (client.balance or 0.0) - total_new_payments), 2)
-
-    # ✅ NUEVO: Crear movimientos de caja para los nuevos pagos
-    db.flush()
-    
-    for payment_record in new_payment_records:
-        movement = models.cash_movement.CashMovement(
+    for payment in new_payments:
+        db.add(models.cash_movement.CashMovement(
             type=models.cash_movement.MovementType.INGRESO,
-            origin=models.cash_movement.MovementOrigin.VENTA,
-            amount_usd=payment_record.amount_usd,
-            payment_method=payment_record.method,
-            description=f"Abono venta {sale.code} - Cliente: {sale.client.name if sale.client else 'Público General'}",
-            category="VENTAS",
-            notes=payment_record.reference,
-            reference_id=str(sale.id),
-            reference_code=sale.code,
+            amount_usd=payment.amount_usd,
+            amount=payment.amount_usd,
+            currency="USD",
+            payment_method=payment.method,
+            reference=payment.reference,
+            payment_id=payment.id,
+            reference_id=sale.id,
+            description=f"Abono venta {sale.code}",
+            category="VENTA",
+            notes=None,
             created_by_user_id=current_user.id,
             created_by_name=current_user.name or current_user.email,
-            status=models.cash_movement.MovementStatus.CONFIRMADO,
-        )
-        db.add(movement)
+            cash_register_id=cash_register.id
+        ))
+
+    sale.paid_usd = round(sale.paid_usd + total_new, 2)
+    sale.balance_usd = round(sale.total_usd - sale.paid_usd, 2)
+    sale.status = "PAGADO" if sale.balance_usd == 0 else "PENDIENTE"
 
     db.commit()
 
     return {
         "detail": "Pago registrado correctamente",
-        "sale_id": sale_id,
+        "sale_id": sale.id,
         "paid_usd": sale.paid_usd,
         "balance_usd": sale.balance_usd,
         "status": sale.status
     }
-
 
 # ============================
 # ENDPOINTS EXISTENTES SIN CAMBIOS
