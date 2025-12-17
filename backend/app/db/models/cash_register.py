@@ -1,8 +1,6 @@
-# app/models/cash_register.py
 from sqlalchemy import Column, Integer, DateTime, String, Numeric, Enum, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from datetime import datetime
 import enum
 
 from app.db.base import Base
@@ -20,21 +18,17 @@ class CashRegister(Base):
 
     opened_at = Column(DateTime(timezone=True), server_default=func.now())
     closed_at = Column(DateTime(timezone=True), nullable=True)
-    expected_amount_usd = Column(Numeric(12, 2))
 
     opening_amount = Column(Numeric(12, 2), nullable=False)
     closing_amount = Column(Numeric(12, 2))
 
+    expected_amount_usd = Column(Numeric(12, 2))
     system_amount = Column(Numeric(12, 2))
     difference = Column(Numeric(12, 2))
 
     opened_by_user_id = Column(Integer, ForeignKey("users.id"))
     closed_by_user_id = Column(Integer, ForeignKey("users.id"))
-    
+
     notes = Column(String)
 
-    cash_movements = relationship(
-        "CashMovement",
-        back_populates="cash_register",
-        lazy="select"
-    )
+    movements = relationship("CashMovement", back_populates="cash_register")
