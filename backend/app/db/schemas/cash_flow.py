@@ -7,7 +7,6 @@ from typing import Optional, List
 from datetime import datetime, date
 from enum import Enum
 
-
 # ============================
 # ENUMS
 # ============================
@@ -134,7 +133,6 @@ class CashFlowSummary(BaseModel):
     # Conteo
     count_ingresos: int
     count_egresos: int
-
 
 class ExpensesByCategoryReport(BaseModel):
     """Egresos agrupados por categoría"""
