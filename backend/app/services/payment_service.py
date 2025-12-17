@@ -7,7 +7,6 @@ from app.db.models.cash_movement import CashMovement, MovementType
 from app.db.schemas.payment import PaymentCreate
 from fastapi import HTTPException, status
 
-
 def process_sale_payments(
     *,
     db: Session,
@@ -86,3 +85,4 @@ def process_sale_payments(
     db.refresh(sale)
 
     return created_payments
+
