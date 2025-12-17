@@ -13,6 +13,10 @@ import { Clients } from '@/pages/Clients';
 import { RegisterUser } from '@/pages/RegisterUser';
 import { ExchangeRate } from '@/pages/ExchangeRate';
 import { Loader } from 'lucide-react';
+import { CashFlow } from '@/pages/CashFlow';
+import { CashRegister } from '@/pages/CashRegister';
+import { Expenses } from '@/pages/Expenses';
+import { CashRegisterGuard } from '@/components/guards/CashRegisterGuard';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -133,6 +137,41 @@ function App() {
             }
           />
 
+          <Route
+            path="/cash-register"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                <CashRegister />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+           path="/expenses"
+            element={
+             <ProtectedRoute>
+               <Layout>
+                  <Expenses />
+               </Layout>
+             </ProtectedRoute>
+            }
+          />
+
+          <Route
+           path="/"
+           element={
+             <ProtectedRoute>
+               <CashRegisterGuard>
+                  <Layout>
+                   <POS />
+                  </Layout>
+                </CashRegisterGuard>
+             </ProtectedRoute>
+           }
+          />
+
           {/* ✅ NUEVA: Tasa de Cambio */}
           <Route
             path="/exchange-rate"
@@ -152,6 +191,18 @@ function App() {
               <ProtectedRoute>
                 <Layout>
                   <RegisterUser />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+
+
+          <Route
+            path="/cash-flow"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <CashFlow />
                 </Layout>
               </ProtectedRoute>
             }
