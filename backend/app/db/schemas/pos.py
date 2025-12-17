@@ -32,6 +32,7 @@ class SaleItemCreate(BaseModel):
     """Item de producto para crear venta"""
     product_id: int
     quantity: PositiveInt
+    price_usd: PositiveFloat
 
 
 class SaleDetailOut(BaseModel):
@@ -82,8 +83,15 @@ class SaleCreate(BaseModel):
     seller_id: int
     payment_method: PaymentMethodEnum
     items: List[SaleItemCreate]
-    payments: Optional[List[PaymentCreate]] = []
+    payments: List[PaymentCreate] = Field(default_factory=list)
 
+    cash_amount_bs: Optional[float] = 0.0
+    transfer_amount_bs: Optional[float] = 0.0
+    transfer_reference: Optional[str] = None
+    transfer_bank_code: Optional[str] = None
+
+    discount_usd: float = 0.0
+    discount_bs: float = 0.0
 
 class SaleOut(BaseModel):
     """Venta completa en respuesta"""
