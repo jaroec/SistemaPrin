@@ -38,4 +38,3 @@ class Expense(Base):
 
     # Relaciones
     provider = relationship("Provider")
-    cash_movement = relationship("CashMovement", uselist=False)
