@@ -11,6 +11,8 @@ import {
   Menu,
   Shield,
   DollarSign,
+  Wallet,
+  TrendingDown,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import clsx from 'clsx';
@@ -32,6 +34,18 @@ const navigation: NavItem[] = [
   { name: 'Productos', href: '/products', icon: Package },
   { name: 'Ventas y Movimientos', href: '/sales', icon: FileText },
   { name: 'Clientes', href: '/clients', icon: Users },
+  { 
+    name: 'Control de Caja', 
+    href: '/cash-register', 
+    icon: Wallet,
+    roles: ['ADMIN', 'CAJERO'] 
+  },
+  { 
+    name: 'Egresos', 
+    href: '/expenses', 
+    icon: TrendingDown,
+    roles: ['ADMIN', 'CAJERO'] 
+  },
   {
     name: 'Tasa de Cambio',
     href: '/exchange-rate',
