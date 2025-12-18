@@ -23,6 +23,7 @@ from sqlalchemy import func
 from app.db.schemas.payment import PaymentCreate, PaymentResponse
 from app.services.payment_service import process_sale_payments
 from app.db.models.sale import Sale
+from app.services.sales_service import create_sale_service 
 
 router = APIRouter()
 
@@ -47,136 +48,14 @@ def summarize_payment_method(payments: List[PaymentCreate]) -> str:
     return "MIXTO"
 
 
-@router.post("/sales", response_model=SaleOut, status_code=status.HTTP_201_CREATED)
+@router.post("/sales", response_model=SaleOut, status_code=201)
 def create_sale(
     payload: SaleCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(role_required("CAJERO", "ADMIN"))
+    current_user = Depends(role_required("CAJERO", "ADMIN"))
 ):
-    try:
-        # 1. Caja abierta
-        cash_register = db.query(models.cash_register.CashRegister).filter(
-            models.cash_register.CashRegister.status == "OPEN",
-            models.cash_register.CashRegister.opened_by_user_id == current_user.id
-        ).first()
+    return create_sale_service(db, payload, current_user)
 
-        if not cash_register:
-            raise HTTPException(400, "No hay una caja abierta para este usuario")
-
-        # 2. Cliente
-        client = None
-        if payload.client_id:
-            client = db.query(models.client.Client).get(payload.client_id)
-            if not client:
-                raise HTTPException(404, "Cliente no encontrado")
-
-        # 3. Productos
-        subtotal = 0.0
-        details_data = []
-
-        for item in payload.items:
-            product = db.query(models.product.Product).filter(
-                models.product.Product.id == item.product_id,
-                models.product.Product.is_active == True
-            ).with_for_update().first()
-
-            if not product:
-                raise HTTPException(404, f"Producto {item.product_id} no encontrado")
-
-            if product.stock < item.quantity:
-                raise HTTPException(400, f"Stock insuficiente para {product.name}")
-
-            item_subtotal = round(product.sale_price * item.quantity, 2)
-            subtotal += item_subtotal
-            details_data.append((product, item, item_subtotal))
-
-        discount = payload.discount_usd or 0.0
-        total = round(subtotal - discount, 2)
-
-        # 4. Crear venta
-        sale = models.sale.Sale(
-            code=generate_sale_code(db),
-            client_id=client.id if client else None,
-            seller_id=payload.seller_id,
-            subtotal_usd=subtotal,
-            discount_usd=discount,
-            total_usd=total,
-            paid_usd=0.0,
-            balance_usd=total,
-            status=models.sale.SaleStatus.PENDING
-        )
-        db.add(sale)
-        db.flush()
-
-        # 5. Detalles y stock
-        for product, item, item_subtotal in details_data:
-            db.add(models.sale_detail.SaleDetail(
-                sale_id=sale.id,
-                product_id=product.id,
-                quantity=item.quantity,
-                price_usd=product.sale_price,
-                subtotal_usd=item_subtotal
-            ))
-            product.stock -= item.quantity
-
-        # 6. Pagos + movimientos de caja
-        total_paid = 0.0
-        credit_used = 0.0
-
-        for p in payload.payments:
-            amount = round(p.amount_usd, 2)
-            method = p.method.value.upper()
-
-            payment = models.payment.Payment(
-                sale_id=sale.id,
-                method=method,
-                amount_usd=amount,
-                reference=p.reference
-            )
-            db.add(payment)
-            db.flush()
-
-            if method == "CREDITO":
-                credit_used += amount
-            else:
-                total_paid += amount
-
-                db.add(models.cash_movement.CashMovement(
-                    type=models.cash_movement.MovementType.INGRESO,
-                    amount_usd=amount,
-                    amount=amount,
-                    currency="USD",
-                    payment_method=method,
-                    reference=p.reference,
-                    payment_id=payment.id,
-                    reference_id=sale.id,
-                    description=f"Venta {sale.code}",
-                    category="VENTA",
-                    notes=None,
-                    created_by_user_id=current_user.id,
-                    created_by_name=current_user.name or current_user.email,
-                    cash_register_id=cash_register.id
-                ))
-
-        sale.paid_usd = total_paid
-        sale.balance_usd = round(total - total_paid, 2)
-
-        if sale.balance_usd == 0:
-            sale.status = models.sale.SaleStatus.PAID
-        elif credit_used > 0:
-            sale.status = models.sale.SaleStatus.CREDIT
-            if client:
-                client.balance = round((client.balance or 0) + credit_used, 2)
-
-        db.commit()
-        return sale
-
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(500, f"Error al crear venta: {str(e)}")
 
 @router.put("/sales/{sale_id}/annul", status_code=status.HTTP_200_OK)
 def annul_sale(
