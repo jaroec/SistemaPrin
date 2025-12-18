@@ -1,17 +1,46 @@
+# app/core/logging_config.py
 import logging
 import logging.config
 import json
+import os
 from typing import Any, Dict
 
+# -------------------------
+# JSON FORMATTER
+# -------------------------
+class JSONFormatter(logging.Formatter):
+    """Formateador de logs en JSON"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_data: Dict[str, Any] = {
+            "timestamp": self.formatTime(record),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno,
+        }
+
+        if record.exc_info:
+            log_data["exception"] = self.formatException(record.exc_info)
+
+        # Extras correctos
+        reserved = set(vars(logging.LogRecord("", 0, "", 0, "", (), None)))
+        for key, value in record.__dict__.items():
+            if key not in reserved:
+                log_data[key] = value
+
+        return json.dumps(log_data, ensure_ascii=False)
+
+
+# -------------------------
+# SETUP
+# -------------------------
 def setup_logging(level: str = "INFO", format_type: str = "json"):
-    """
-    Configura logging centralizado
-    
-    Args:
-        level: DEBUG, INFO, WARNING, ERROR, CRITICAL
-        format_type: "json" o "text"
-    """
-    
+    level = level.upper()
+    os.makedirs("logs", exist_ok=True)
+
     if format_type == "json":
         config = {
             "version": 1,
@@ -19,9 +48,6 @@ def setup_logging(level: str = "INFO", format_type: str = "json"):
             "formatters": {
                 "json": {
                     "()": JSONFormatter,
-                },
-                "standard": {
-                    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
                 }
             },
             "handlers": {
@@ -36,7 +62,7 @@ def setup_logging(level: str = "INFO", format_type: str = "json"):
                     "level": level,
                     "formatter": "json",
                     "filename": "logs/app.log",
-                    "maxBytes": 10485760,  # 10MB
+                    "maxBytes": 10485760,
                     "backupCount": 10
                 }
             },
@@ -71,50 +97,16 @@ def setup_logging(level: str = "INFO", format_type: str = "json"):
                     "class": "logging.StreamHandler",
                     "level": level,
                     "formatter": "standard"
-                },
-                "file": {
-                    "class": "logging.handlers.RotatingFileHandler",
-                    "level": level,
-                    "formatter": "standard",
-                    "filename": "logs/app.log",
-                    "maxBytes": 10485760,
-                    "backupCount": 10
                 }
             },
             "root": {
                 "level": level,
-                "handlers": ["console", "file"]
+                "handlers": ["console"]
             }
         }
-    
+
     logging.config.dictConfig(config)
 
 
-class JSONFormatter(logging.Formatter):
-    """Formateador de logs en JSON"""
-    
-    def format(self, record: logging.LogRecord) -> str:
-        log_data: Dict[str, Any] = {
-            "timestamp": self.formatTime(record),
-            "level": record.levelname,
-            "logger": record.name,
-            "message": record.getMessage(),
-            "module": record.module,
-            "function": record.funcName,
-            "line": record.lineno,
-        }
-        
-        # Agregar excepciones si existen
-        if record.exc_info:
-            log_data["exception"] = self.formatException(record.exc_info)
-        
-        # Agregar datos extras si existen
-        if hasattr(record, "extra"):
-            log_data.update(record.extra)
-        
-        return json.dumps(log_data, ensure_ascii=False)
-
-
 def get_logger(name: str) -> logging.Logger:
-    """Obtiene un logger configurado"""
     return logging.getLogger(name)
