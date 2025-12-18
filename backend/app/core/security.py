@@ -8,6 +8,10 @@ from sqlalchemy.orm import Session
 from app.db.models.user import User
 from app.db.base import SessionLocal
 import os
+import logging
+from app.db import models
+
+logger = logging.getLogger(__name__)
 
 # ==============================
 # ⚙️ CONFIGURACIÓN GLOBAL
@@ -18,7 +22,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440
 
 # ✅ CORRECCIÓN: Ruta completa al endpoint de login
 oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl="/api/v1/auth/token",  # ← CAMBIO AQUÍ
+    tokenUrl="/api/v1/auth/login",  # ← CAMBIO AQUÍ
     auto_error=True
 )
 
@@ -64,13 +68,9 @@ def get_db():
 # 👤 USUARIO ACTUAL DESDE TOKEN
 # ==============================
 def get_current_user(
-    token: str = Depends(oauth2_scheme), 
+    token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
-):
-    """Decodifica JWT y busca al usuario en BD"""
-    
-    print("🔐 TOKEN RECIBIDO:", token[:50] + "..." if len(token) > 50 else token)
-
+) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="No autenticado o token inválido",
@@ -78,59 +78,84 @@ def get_current_user(
     )
 
     try:
-        # Intenta decodificar el token
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        
-        print("📄 PAYLOAD DECODIFICADO:", payload)
-        print("📧 EMAIL EXTRAÍDO:", email)
-
-        if email is None:
-            print("❌ Token sin campo 'sub'")
+        email: str | None = payload.get("sub")
+        if not email:
             raise credentials_exception
-
-    except JWTError as e:
-        print("❌ Error al decodificar JWT:", str(e))
+    except JWTError:
         raise credentials_exception
 
-    # Buscar usuario en BD
-    user = db.query(User).filter(User.email == email).first()
+    user = db.query(User).filter(
+        User.email == email,
+        User.is_active == True
+    ).first()
 
-    if user is None:
-        print("❌ Usuario no encontrado en la base de datos:", email)
-        raise credentials_exception
-
-    if not user.is_active:
-        print("❌ Usuario inactivo:", email)
+    if not user:
         raise credentials_exception
 
     # -----------------------
-    # REVOCATION CHECK
+    # REVOCACIÓN DE TOKEN
     # -----------------------
-    # Si el token fue revocado (logout server-side), rechazarlo.
     try:
         from app.db.models.revoked_token import RevokedToken
-        revoked = db.query(RevokedToken).filter(RevokedToken.token == token).first()
+        revoked = db.query(RevokedToken).filter(
+            RevokedToken.token == token
+        ).first()
         if revoked:
-            print("❌ Token revocado encontrado en DB. Rechazando acceso.")
             raise credentials_exception
-    except Exception as e:
-        # Si no existe la tabla por alguna razón, solo logueamos la excepción y
-        # permitimos el acceso. En producción debes ejecutar la migración.
-        print("⚠️ No se pudo comprobar revoked_tokens:", str(e))
+    except Exception:
+        # Si la tabla no existe aún, no rompemos la app
+        pass
 
     return user
 
 # ==============================
 # 🔒 DECORADOR PARA ROLES
 # ==============================
-def role_required(*roles):
-    """Protege rutas según roles permitidos"""
-    def dependency(current_user: User = Depends(get_current_user)):
-        if current_user.role not in roles:
+def role_required(*allowed_roles: str):
+    def role_checker(
+        current_user: User = Depends(get_current_user)
+    ) -> User:
+        user_role = (
+            current_user.role.value
+            if hasattr(current_user.role, "value")
+            else current_user.role
+        )
+
+        if user_role.upper() not in [r.upper() for r in allowed_roles]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"No tienes permisos para realizar esta acción. Rol requerido: {', '.join(roles)}"
+                detail="No autorizado"
             )
         return current_user
-    return dependency
+
+    return role_checker
+
+
+def authenticate_user(
+    db: Session,
+    email: str,
+    password: str
+):
+    """
+    Autentica un usuario por email y password.
+    Retorna el usuario si es válido, o None.
+    """
+
+    user = db.query(models.user.User).filter(
+        models.user.User.email == email
+    ).first()
+
+    if not user:
+        logger.warning(f"⚠️ Usuario no encontrado: {email}")
+        return None
+
+    if not user.is_active:
+        logger.warning(f"⚠️ Usuario inactivo: {email}")
+        return None
+
+    if not verify_password(password, user.password_hash):
+        logger.warning(f"⚠️ Password inválido: {email}")
+        return None
+
+    return user
