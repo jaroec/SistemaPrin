@@ -26,6 +26,7 @@ from app.api.v1 import (
     search,
     exchange_rate,
     cash_flow,
+    users,
 )
 
 
@@ -60,11 +61,10 @@ app = FastAPI(
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.get_allowed_origins,
-    allow_credentials=settings.CORS_CREDENTIALS,
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
     allow_headers=["*"],
-    max_age=3600,
 )
 
 app.state.limiter = limiter
@@ -72,7 +72,7 @@ app.state.limiter = limiter
 # ==========================================
 # RUTAS
 # ==========================================
-
+app.include_router(users.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["🔐 Autenticación"])
 app.include_router(search.router, prefix="/api/v1", tags=["🔍 Búsqueda"])
 app.include_router(products.router, prefix="/api/v1/products", tags=["📦 Productos"])
