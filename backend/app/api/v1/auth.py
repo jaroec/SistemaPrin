@@ -5,7 +5,7 @@ from datetime import timedelta, datetime
 from jose import jwt, JWTError
 from typing import List
 import logging
-
+from app.db.schemas.auth import LoginResponse
 from app.db import models
 from app.db.schemas.user import UserCreate, UserOut, Token
 from app.core.security import (
@@ -18,57 +18,35 @@ from app.core.security import (
     ALGORITHM
 )
 from app.core.logging_config import get_logger
-
+from app.core.security import authenticate_user
+from app.db.schemas.auth import LoginRequest, LoginResponse
+from app.db.models import User
 logger = get_logger(__name__)
 router = APIRouter()
-
-
-# =============================
-# REGISTRO DE USUARIO
-# =============================
-@router.post("/register", response_model=UserOut)
-def register_user(payload: UserCreate, db: Session = Depends(get_db)):
-    """Registra un nuevo usuario"""
-    
-    # Validar que el email no esté registrado
-    existing = db.query(models.user.User).filter(
-        models.user.User.email == payload.email
-    ).first()
-    
-    if existing:
-        logger.warning(f"❌ Intento de registro con email duplicado: {payload.email}")
-        raise HTTPException(
-            status_code=400,
-            detail="El correo ya está registrado"
-        )
-    
-    # Validar contraseña
-    if len(payload.password) < 6:
-        raise HTTPException(
-            status_code=400,
-            detail="La contraseña debe tener mínimo 6 caracteres"
-        )
-    
-    # Crear usuario
-    user = models.user.User(
-        email=payload.email,
-        name=payload.name,
-        password_hash=get_password_hash(payload.password),
-        role=payload.role
-    )
-    
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    
-    logger.info(f"✅ Usuario registrado: {user.email} (Rol: {user.role})")
-    
-    return user
-
 
 # =============================
 # LOGIN / TOKEN
 # =============================
+@router.post("/login", response_model=LoginResponse)
+def login(
+    data: LoginRequest,
+    db: Session = Depends(get_db)
+):
+    user = authenticate_user(db, data.email, data.password)
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Credenciales inválidas")
+
+    token = create_access_token(
+        data={"sub": str(user.id), "role": user.role.lower()}
+    )
+
+    return {
+        "access_token": token,
+        "user": user
+    }
+
+
 @router.post("/token", response_model=Token, summary="Iniciar sesión")
 def login_user(
     request: Request,
@@ -121,17 +99,6 @@ def login_user(
         "token_type": "bearer"
     }
 
-
-# =============================
-# PERFIL
-# =============================
-@router.get("/me", response_model=UserOut, summary="Obtener perfil actual")
-def read_users_me(current_user: models.user.User = Depends(get_current_user)):
-    """Retorna datos del usuario autenticado"""
-    logger.debug(f"📋 Perfil accedido por: {current_user.email}")
-    return current_user
-
-
 # =============================
 # LOGOUT
 # =============================
@@ -176,6 +143,55 @@ def logout(
         )
     
     return {"detail": "Logout exitoso"}
+
+# =============================
+# PERFIL
+# =============================
+@router.get("/me")
+def me(current_user: User = Depends(get_current_user)):
+    return current_user
+
+# =============================
+# REGISTRO DE USUARIO
+# =============================
+@router.post("/register", response_model=UserOut)
+def register_user(payload: UserCreate, db: Session = Depends(get_db)):
+    """Registra un nuevo usuario"""
+    
+    # Validar que el email no esté registrado
+    existing = db.query(models.user.User).filter(
+        models.user.User.email == payload.email
+    ).first()
+    
+    if existing:
+        logger.warning(f"❌ Intento de registro con email duplicado: {payload.email}")
+        raise HTTPException(
+            status_code=400,
+            detail="El correo ya está registrado"
+        )
+    
+    # Validar contraseña
+    if len(payload.password) < 6:
+        raise HTTPException(
+            status_code=400,
+            detail="La contraseña debe tener mínimo 6 caracteres"
+        )
+    
+    # Crear usuario
+    user = models.user.User(
+        email=payload.email,
+        name=payload.name,
+        password_hash=get_password_hash(payload.password),
+        role=payload.role
+    )
+    
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    
+    logger.info(f"✅ Usuario registrado: {user.email} (Rol: {user.role})")
+    
+    return user
 
 
 # =============================
@@ -222,99 +238,3 @@ def verify_token(token: str, db: Session = Depends(get_db)):
         logger.warning(f"⚠️ Token inválido: {str(e)}")
         return {"valid": False, "error": str(e)}
 
-
-# =============================
-# ADMIN: LISTAR USUARIOS
-# =============================
-@router.get("/users", response_model=List[UserOut])
-def list_users(
-    db: Session = Depends(get_db),
-    current_user: models.user.User = Depends(get_current_user)
-):
-    """ADMIN ONLY - Lista todos los usuarios"""
-    
-    if current_user.role != "ADMIN":
-        logger.warning(f"⛔ Acceso denegado a {current_user.email} - No es ADMIN")
-        raise HTTPException(
-            status_code=403,
-            detail="Solo administradores pueden ver usuarios"
-        )
-    
-    users = db.query(models.user.User).all()
-    logger.info(f"📋 Listado de usuarios solicitado por {current_user.email}")
-    
-    return users
-
-
-# =============================
-# ADMIN: ELIMINAR USUARIO
-# =============================
-@router.delete("/users/{user_id}")
-def delete_user(
-    user_id: int,
-    db: Session = Depends(get_db),
-    current_user: models.user.User = Depends(get_current_user)
-):
-    """ADMIN ONLY - Elimina un usuario"""
-    
-    if current_user.role != "ADMIN":
-        raise HTTPException(status_code=403, detail="Solo administradores")
-    
-    if user_id == current_user.id:
-        logger.warning(f"⛔ {current_user.email} intentó auto-eliminarse")
-        raise HTTPException(
-            status_code=400,
-            detail="No puedes eliminar tu propia cuenta"
-        )
-    
-    user = db.query(models.user.User).filter(
-        models.user.User.id == user_id
-    ).first()
-    
-    if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
-    
-    db.delete(user)
-    db.commit()
-    
-    logger.warning(f"🗑️ Usuario eliminado: {user.email} por {current_user.email}")
-    
-    return {"detail": "Usuario eliminado"}
-
-
-# =============================
-# ADMIN: CAMBIAR CONTRASEÑA
-# =============================
-@router.put("/users/{user_id}/password")
-def update_user_password(
-    user_id: int,
-    password_data: dict,
-    db: Session = Depends(get_db),
-    current_user: models.user.User = Depends(get_current_user)
-):
-    """ADMIN ONLY - Cambia contraseña de usuario"""
-    
-    if current_user.role != "ADMIN":
-        raise HTTPException(status_code=403, detail="Solo administradores")
-    
-    user = db.query(models.user.User).filter(
-        models.user.User.id == user_id
-    ).first()
-    
-    if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
-    
-    new_password = password_data.get("password")
-    
-    if not new_password or len(new_password) < 6:
-        raise HTTPException(
-            status_code=400,
-            detail="Contraseña debe tener mínimo 6 caracteres"
-        )
-    
-    user.password_hash = get_password_hash(new_password)
-    db.commit()
-    
-    logger.info(f"🔑 Contraseña actualizada para {user.email} por {current_user.email}")
-    
-    return {"detail": "Contraseña actualizada"}
