@@ -15,7 +15,6 @@ class MovementTypeEnum(str, Enum):
     INGRESO = "INGRESO"
     EGRESO = "EGRESO"
 
-
 class MovementOriginEnum(str, Enum):
     VENTA = "VENTA"
     PROVEEDOR = "PROVEEDOR"
