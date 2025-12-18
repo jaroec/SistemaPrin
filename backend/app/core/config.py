@@ -13,11 +13,15 @@ class Settings(BaseSettings):
     # Seguridad
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     
     # CORS
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
     CORS_CREDENTIALS: bool = True
+    CORS_ORIGINS: List[str] = [
+        "http://localhost:5173",
+        "http://localhost:3000"
+    ]
     
     # Caché
     CACHE_TTL: int = 3600
