@@ -1,14 +1,28 @@
-// api/sales.ts
+// @/api/sales.ts
 import api from './axios';
 import { Sale, SaleCreate, Payment } from '@/types';
 
 export const salesApi = {
   /**
    * Crear nueva venta
+   * @param data - Datos de la venta
+   * @returns Sale creada
+   * @throws AxiosError con detalles del error
    */
   create: async (data: SaleCreate): Promise<Sale> => {
-    const response = await api.post<Sale>('/api/v1/pos/sales', data);
-    return response.data;
+    try {
+      console.log('📤 Enviando venta:', data);
+      const response = await api.post<Sale>('/api/v1/pos/sales', data);
+      console.log('✅ Venta creada:', response.data);
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Error al crear venta:', {
+        status: error.response?.status,
+        data: error.response?.data,
+        message: error.message,
+      });
+      throw error;
+    }
   },
 
   /**
