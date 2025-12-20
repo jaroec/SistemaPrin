@@ -1,50 +1,55 @@
-// components/layout/Layout.tsx - ACTUALIZADO
-import { ReactNode, useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { ReactNode, useState } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard,
   ShoppingCart,
   Package,
   Users,
-  FileText,
   LogOut,
   Menu,
   Shield,
   DollarSign,
+  Receipt,
   Wallet,
+  Activity,
   TrendingDown,
-} from 'lucide-react';
-import { useAuthStore } from '@/store/authStore';
-import clsx from 'clsx';
+} from 'lucide-react'
+import { useAuthStore } from '@/store/authStore'
+import clsx from 'clsx'
 
 interface LayoutProps {
-  children: ReactNode;
+  children: ReactNode
 }
 
 interface NavItem {
-  name: string;
-  href: string;
-  icon: any;
-  roles?: string[];
+  name: string
+  href: string
+  icon: any
+  roles?: string[]
 }
 
 const navigation: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { name: 'Punto de Venta', href: '/', icon: ShoppingCart },
-  { name: 'Productos', href: '/products', icon: Package },
-  { name: 'Ventas y Movimientos', href: '/sales', icon: FileText },
-  { name: 'Clientes', href: '/clients', icon: Users },
-  { 
-    name: 'Control de Caja', 
-    href: '/cash-register', 
+  { name: 'Mis Productos', href: '/products', icon: Package },
+  { name: 'Mis Ventas', href: '/sales', icon: Receipt },
+  { name: 'Mis Clientes', href: '/clients', icon: Users },
+  {
+    name: 'Control de Caja',
+    href: '/cash-register',
     icon: Wallet,
-    roles: ['ADMIN', 'CAJERO'] 
+    roles: ['ADMIN', 'CAJERO'],
   },
-  { 
-    name: 'Egresos', 
-    href: '/expenses', 
+  {
+    name: 'Egresos',
+    href: '/expenses',
     icon: TrendingDown,
-    roles: ['ADMIN', 'CAJERO'] 
+    roles: ['ADMIN', 'CAJERO'],
+  },
+  {
+    name: 'Movimientos',
+    href: '/movements',
+    icon: Activity, // ✅ icono correcto para auditoría / logs
   },
   {
     name: 'Tasa de Cambio',
@@ -58,33 +63,32 @@ const navigation: NavItem[] = [
     icon: Shield,
     roles: ['ADMIN'],
   },
-];
+]
 
 const Sidebar = () => {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const logout = useAuthStore((state) => state.logout);
-  const user = useAuthStore((state) => state.user);
+  const location = useLocation()
+  const navigate = useNavigate()
+  const logout = useAuthStore((state) => state.logout)
+  const user = useAuthStore((state) => state.user)
 
   const handleLogout = async () => {
+    const confirmed = window.confirm('¿Estás seguro de cerrar sesión?')
+    if (!confirmed) return
+
     try {
-      const confirmed = window.confirm('¿Estás seguro de cerrar sesión?');
-      if (!confirmed) return;
-
-      await logout();
-      localStorage.clear();
-      navigate('/login', { replace: true });
+      await logout()
+      localStorage.clear()
+      navigate('/login', { replace: true })
     } catch (error) {
-      console.error('Error:', error);
-      navigate('/login', { replace: true });
+      console.error('Logout error:', error)
+      navigate('/login', { replace: true })
     }
-  };
+  }
 
-  // ✅ Filtrar navegación por rol
   const filteredNavigation = navigation.filter((item) => {
-    if (!item.roles) return true;
-    return item.roles.includes(user?.role || '');
-  });
+    if (!item.roles) return true
+    return item.roles.includes(user?.role || '')
+  })
 
   return (
     <aside className="w-64 bg-white border-r border-gray-200 flex flex-col h-screen">
@@ -104,7 +108,8 @@ const Sidebar = () => {
       {/* Navigation */}
       <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
         {filteredNavigation.map((item) => {
-          const isActive = location.pathname === item.href;
+          const isActive = location.pathname === item.href
+
           return (
             <Link
               key={item.name}
@@ -119,14 +124,14 @@ const Sidebar = () => {
               <item.icon className="w-5 h-5 flex-shrink-0" />
               <span>{item.name}</span>
             </Link>
-          );
+          )
         })}
       </nav>
 
       {/* User Info & Logout */}
       <div className="p-4 border-t border-gray-200">
         <div className="flex items-center gap-3 mb-3 px-2">
-          <div className="w-10 h-10 bg-primary-100 rounded-full flex items-center justify-center flex-shrink-0">
+          <div className="w-10 h-10 bg-primary-100 rounded-full flex items-center justify-center">
             <span className="text-primary-700 font-semibold text-lg">
               {user?.name?.charAt(0).toUpperCase()}
             </span>
@@ -141,7 +146,6 @@ const Sidebar = () => {
 
         <button
           onClick={handleLogout}
-          type="button"
           className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 rounded-lg transition-colors"
         >
           <LogOut className="w-4 h-4" />
@@ -149,75 +153,67 @@ const Sidebar = () => {
         </button>
       </div>
     </aside>
-  );
-};
+  )
+}
 
 const Header = ({ onMenuClick }: { onMenuClick: () => void }) => {
-  const { user } = useAuthStore();
+  const { user } = useAuthStore()
 
   return (
     <header className="bg-white border-b border-gray-200 lg:border-none">
       <div className="flex items-center justify-between px-6 py-4">
-        {/* Mobile Menu Button */}
         <button
           onClick={onMenuClick}
-          className="lg:hidden p-2 rounded-lg hover:bg-gray-100 transition-colors"
+          className="lg:hidden p-2 rounded-lg hover:bg-gray-100"
         >
           <Menu className="w-6 h-6 text-gray-600" />
         </button>
 
-        {/* User Info - Mobile */}
         <div className="lg:hidden flex items-center gap-3">
           <div className="w-8 h-8 bg-primary-100 rounded-full flex items-center justify-center">
             <span className="text-primary-700 font-semibold text-sm">
               {user?.name?.charAt(0).toUpperCase()}
             </span>
           </div>
-          <div>
-            <p className="text-sm font-medium text-gray-900">{user?.name}</p>
-          </div>
+          <p className="text-sm font-medium text-gray-900">{user?.name}</p>
         </div>
 
-        {/* Desktop Spacer */}
         <div className="hidden lg:block flex-1" />
       </div>
     </header>
-  );
-};
+  )
+}
 
 export const Layout = ({ children }: LayoutProps) => {
-  const [showMobileSidebar, setShowMobileSidebar] = useState(false);
+  const [showMobileSidebar, setShowMobileSidebar] = useState(false)
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
-      {/* Sidebar Desktop */}
+      {/* Desktop Sidebar */}
       <div className="hidden lg:block">
         <Sidebar />
       </div>
 
-      {/* Sidebar Mobile */}
+      {/* Mobile Sidebar */}
       {showMobileSidebar && (
         <>
-          {/* Overlay */}
           <div
             className="fixed inset-0 bg-black/50 z-40 lg:hidden"
             onClick={() => setShowMobileSidebar(false)}
           />
-          {/* Sidebar */}
           <div className="fixed inset-y-0 left-0 z-50 lg:hidden">
             <Sidebar />
           </div>
         </>
       )}
 
-      {/* Main Content */}
+      {/* Main */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Header */}
         <Header onMenuClick={() => setShowMobileSidebar(!showMobileSidebar)} />
-
-        {/* Content */}
-        <main className="flex-1 overflow-y-auto bg-gray-50">{children}</main>
+        <main className="flex-1 overflow-y-auto bg-gray-50">
+          {children}
+        </main>
       </div>
     </div>
-  );
+  )
 }
