@@ -23,6 +23,7 @@ from app.api.v1 import (
     reports,
     dashboard,
     cash_register,
+    movements,
     search,
     exchange_rate,
     cash_flow,
@@ -86,7 +87,7 @@ app.include_router(expenses.router, prefix="/api/v1", tags=["💰 Gastos"])
 app.include_router( exports.router, prefix="/api/v1", tags=["📤 Exportaciones"])
 app.include_router(dashboard_financial.router, prefix="/api/v1", tags=["📊 Dashboard Financiero"])
 app.include_router(cash_register.router, prefix="/api/v1")
-
+app.include_router(movements.router, prefix="/api/v1", tags=["Movements"])
 
 # ==========================================
 # OPENAPI SECURITY
