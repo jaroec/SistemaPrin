@@ -8,6 +8,7 @@ import { Login } from '@/pages/Login';
 import { Dashboard } from '@/pages/Dashboard';
 import { POS } from '@/pages/POS';
 import { Products } from '@/pages/Products';
+import { Movements } from '@/pages/Movements';
 import { Sales } from '@/pages/Sales';
 import { Clients } from '@/pages/Clients';
 import { RegisterUser } from '@/pages/RegisterUser';
@@ -195,7 +196,16 @@ function App() {
               </ProtectedRoute>
             }
           />
-
+          <Route
+            path="/movements"
+            element={
+              <ProtectedRoute>
+                <Layout>
+                  <Movements />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
 
           <Route
             path="/cash-flow"
