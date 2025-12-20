@@ -84,6 +84,12 @@ interface PaymentModalProps {
   onSuccess: () => void;
 }
 
+interface BackendPayment {
+  method: string;
+  amount_usd: number;
+  reference?: string;
+}
+
 export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
   const { items, getTotal, clearCart } = useCartStore();
   const { user } = useAuthStore();
@@ -117,6 +123,54 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
     queryFn: clientsApi.getAll,
   });
 
+  // Helper para extraer mensaje de error
+  const extractErrorMessage = (error: any): string => {
+    try {
+      if (!error) return 'Error desconocido';
+      
+      const data = error.response?.data;
+      
+      if (!data) {
+        return error.message || 'Error al procesar la venta';
+      }
+
+      // Si es un array de errores de validación (Pydantic)
+      if (Array.isArray(data)) {
+        return data
+          .map((err: any) => {
+            if (typeof err === 'string') return err;
+            if (err.msg) return err.msg;
+            if (err.message) return err.message;
+            return 'Error de validación';
+          })
+          .join(', ');
+      }
+
+      // Si es un objeto
+      if (typeof data === 'object') {
+        // detail es el más común en FastAPI
+        if (data.detail) {
+          if (typeof data.detail === 'string') return data.detail;
+          if (Array.isArray(data.detail)) {
+            return data.detail
+              .map((d: any) => d.msg || JSON.stringify(d))
+              .join(', ');
+          }
+        }
+        
+        // Otros campos comunes
+        if (data.message) return data.message;
+        if (data.msg) return data.msg;
+        if (data.error) return data.error;
+      }
+
+      // Si llegamos aquí, retorna el string
+      return typeof data === 'string' ? data : 'Error al procesar la venta';
+    } catch (e) {
+      return 'Error desconocido al procesar la venta';
+    }
+  };
+
   const createSaleMutation = useMutation({
     mutationFn: salesApi.create,
     onSuccess: () => {
@@ -125,8 +179,9 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
       onSuccess();
     },
     onError: (error: any) => {
-      const detail = error.response?.data?.detail || 'Error al procesar la venta';
-      setError(detail);
+      const errorMessage = extractErrorMessage(error);
+      setError(errorMessage);
+      console.error('Error en creación de venta:', error);
     },
   });
 
@@ -174,14 +229,14 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
         return;
       }
       setPayments([...payments, {
-        method: 'EFECTIVO' as PaymentMethod,
+        method: 'EFECTIVO',
         amount_usd: usd,
         exchange_rate: rate,
         amount_secondary: ves,
       }]);
     }
 
-    else if (selectedMethod === 'TRANSFERENCIA' || selectedMethod === 'PAGO_MOVIL') {
+    else if (selectedMethod === 'TRANSFERENCIA') {
       const ves = parseFloat(amountVES);
       const usd = parseFloat(amountUSD);
       if (isNaN(ves) || ves <= 0) {
@@ -202,7 +257,36 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
       }
       const bank = venezuelanBanks.find(b => b.code === selectedBank);
       setPayments([...payments, {
-        method: selectedMethod as PaymentMethod,
+        method: 'TRANSFERENCIA',
+        amount_usd: usd,
+        amount_secondary: ves,
+        reference: `${reference} - ${bank?.name || ''}`,
+        exchange_rate: rate,
+      }]);
+    }
+
+    else if (selectedMethod === 'PAGO_MOVIL') {
+      const ves = parseFloat(amountVES);
+      const usd = parseFloat(amountUSD);
+      if (isNaN(ves) || ves <= 0) {
+        setError('Ingrese un monto válido en Bs');
+        return;
+      }
+      if (!reference.trim()) {
+        setError('La referencia es obligatoria');
+        return;
+      }
+      if (!selectedBank) {
+        setError('Seleccione el banco');
+        return;
+      }
+      if (usd > remaining) {
+        setError(`El monto excede lo pendiente: ${formatCurrency(remaining)}`);
+        return;
+      }
+      const bank = venezuelanBanks.find(b => b.code === selectedBank);
+      setPayments([...payments, {
+        method: 'PAGO_MOVIL',
         amount_usd: usd,
         amount_secondary: ves,
         reference: `${reference} - ${bank?.name || ''}`,
@@ -231,7 +315,7 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
       }
       const bank = venezuelanBanks.find(b => b.code === selectedBank);
       setPayments([...payments, {
-        method: 'TARJETA' as PaymentMethod,
+        method: 'TARJETA',
         amount_usd: usd,
         amount_secondary: ves,
         reference: `${cardType} - ${reference} - ${bank?.name || ''}`,
@@ -255,7 +339,7 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
       }
       const platform = digitalPlatforms.find(p => p.code === selectedPlatform);
       setPayments([...payments, {
-        method: 'DIVISAS' as PaymentMethod,
+        method: 'DIVISAS',
         amount_usd: usd,
         reference: divisasType === 'DIGITAL' ? platform?.name : 'EFECTIVO',
         exchange_rate: rate,
@@ -274,7 +358,7 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
         return;
       }
       setPayments([...payments, {
-        method: 'CREDITO' as PaymentMethod,
+        method: 'CREDITO',
         amount_usd: remaining,
       }]);
     }
@@ -316,15 +400,21 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
       return;
     }
 
+    // Transformar payments al formato esperado por el backend
+    const backendPayments: BackendPayment[] = payments.map(p => ({
+      method: p.method,
+      amount_usd: parseFloat(p.amount_usd.toFixed(2)),
+      reference: p.reference || undefined,
+    }));
+
     createSaleMutation.mutate({
-      seller_id: user!.id,
-      payment_method: payments.length > 1 ? 'MIXTO' : (payments[0]?.method || 'EFECTIVO') as PaymentMethod,
       items: items.map((item) => ({
         product_id: item.product.id,
         quantity: item.quantity,
       })),
-      payments: payments,
-      client_id: selectedClient?.id,
+      payments: backendPayments,
+      client_id: selectedClient?.id || null,
+      discount_usd: 0, // Si tienes descuento, agregarlo aquí
     });
   };
 
@@ -454,7 +544,7 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Banco Receptor
+                Banco
               </label>
               <select
                 value={selectedBank}
@@ -758,7 +848,7 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
           {/* Total a Pagar */}
           <div className="p-6 bg-gradient-to-br from-primary-50 to-primary-100 border border-primary-200 rounded-xl">
             <p className="text-sm text-primary-700 mb-2 font-medium">Total a Pagar</p>
-            <p className="text-4xl font-bold text-primary-900">{formatCurrency(total)}</p>
+            <p className="text-4xl font-bold text-primary-900">${formatCurrency(total)}</p>
             {exchangeRate && (
               <>
                 <p className="text-lg text-primary-700 mt-2">≈ {formatCurrency(totalVES)} Bs</p>
@@ -774,12 +864,12 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
             <div className="grid grid-cols-2 gap-3">
               <div className="p-4 bg-green-50 rounded-lg border border-green-200">
                 <p className="text-xs text-green-700 mb-1">Pagado</p>
-                <p className="font-bold text-green-600 text-xl">{formatCurrency(totalPaid)}</p>
+                <p className="font-bold text-green-600 text-xl">${formatCurrency(totalPaid)}</p>
                 <p className="text-sm text-green-600 mt-1">{formatCurrency(totalPaidVES)} Bs</p>
               </div>
               <div className="p-4 bg-orange-50 rounded-lg border border-orange-200">
                 <p className="text-xs text-orange-700 mb-1">Pendiente</p>
-                <p className="font-bold text-orange-600 text-xl">{formatCurrency(Math.max(0, remaining))}</p>
+                <p className="font-bold text-orange-600 text-xl">${formatCurrency(Math.max(0, remaining))}</p>
                 <p className="text-sm text-orange-600 mt-1">{formatCurrency(Math.max(0, remainingVES))} Bs</p>
               </div>
             </div>
@@ -847,7 +937,7 @@ export const PaymentModal = ({ onClose, onSuccess }: PaymentModalProps) => {
                           <span className="font-semibold text-gray-900">{payment.method}</span>
                         </div>
                         <p className="text-2xl font-bold text-gray-900 mb-2">
-                          {formatCurrency(payment.amount_usd)}
+                          ${formatCurrency(payment.amount_usd)}
                         </p>
                         {payment.amount_secondary && (
                           <p className="text-sm text-gray-600">
