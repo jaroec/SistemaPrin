@@ -10,6 +10,8 @@ import {
   DollarSign,
   TrendingDown,
   Wallet,
+  Activity,
+  ShoppingCartIcon,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import clsx from 'clsx';
@@ -24,9 +26,9 @@ interface NavItem {
 const navigation: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { name: 'Punto de Venta', href: '/', icon: ShoppingCart },
-  { name: 'Productos', href: '/products', icon: Package },
-  { name: 'Ventas y Movimientos', href: '/sales', icon: FileText },
-  { name: 'Clientes', href: '/clients', icon: Users },
+  { name: 'Mis Productos', href: '/products', icon: Package },
+  { name: 'Mis Ventas', href: '/sales', icon: FileText },
+  { name: 'Mis Clientes', href: '/clients', icon: Users },
   { 
     name: 'Control de Caja', 
     href: '/cash-register', 
@@ -38,6 +40,11 @@ const navigation: NavItem[] = [
     href: '/expenses', 
     icon: TrendingDown,
     roles: ['ADMIN', 'CAJERO'] 
+  },
+  {
+    name: 'Movimientos',
+    href: '/movements',
+    icon: Activity, // ✅ icono correcto para auditoría / logs
   },
   {
     name: 'Tasa de Cambio',
@@ -59,7 +66,7 @@ export const Sidebar = () => {
   const logout = useAuthStore((state) => state.logout);
   const user = useAuthStore((state) => state.user);
 
-  // ✅ LOGOUT MEJORADO
+  // ✅ LOGOUT
   const handleLogout = async () => {
     try {
       const confirmed = window.confirm('¿Estás seguro de cerrar sesión?');
@@ -86,7 +93,7 @@ export const Sidebar = () => {
       <div className="p-6 border-b border-gray-200">
         <Link to="/" className="flex items-center gap-3">
           <div className="w-10 h-10 bg-primary-600 rounded-xl flex items-center justify-center">
-            <ShoppingCart className="w-6 h-6 text-white" />
+            <ShoppingCartIcon className="w-6 h-6 text-white" />
           </div>
           <div>
             <h1 className="text-xl font-bold text-gray-900">FinkuPOS</h1>
