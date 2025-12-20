@@ -1,0 +1,15 @@
+import enum
+
+class PaymentMethod(enum.Enum):
+    EFECTIVO = "EFECTIVO"
+    TRANSFERENCIA = "TRANSFERENCIA"
+    PAGO_MOVIL = "PAGO_MOVIL"
+    TARJETA_DEBITO = "TARJETA_DEBITO"
+    TARJETA_CREDITO = "TARJETA_CREDITO"
+    DIVISA_EFECTIVO = "DIVISA_EFECTIVO"
+    DIVISA_DIGITAL = "DIVISA_DIGITAL"
+    CREDITO = "CREDITO"
+
+class Currency(enum.Enum):
+    USD = "USD"
+    VES = "VES"
