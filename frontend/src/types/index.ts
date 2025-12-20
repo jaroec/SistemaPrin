@@ -1,9 +1,12 @@
 // Auth Types
 export interface User {
   id: number;
-  email: string;
   name: string;
-  role: 'ADMIN' | 'CAJERO' | 'INVENTARIO';
+  email: string;
+  role: 'ADMIN' | 'MANAGER' | 'SELLER';
+  branch_id?: number;
+  is_active: boolean;
+  created_at: string;
 }
 
 export interface LoginCredentials {
@@ -179,4 +182,10 @@ export interface ExchangeRateConfig {
   rate: number;
   set_by: string;
   set_at: string;
+}
+
+export interface PaymentBackend {
+  method: string;
+  amount_usd: number;
+  reference?: string;
 }
